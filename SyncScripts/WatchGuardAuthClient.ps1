@@ -1,0 +1,524 @@
+﻿<#
+.SYNOPSIS
+    SERVER SCRIPT - Keeps a network share stocked with the latest WatchGuard
+    Authentication Client (Firebox Active Directory SSO Client) MSI.
+
+.DESCRIPTION
+    WatchGuard publishes the client on its CDN with a versioned name, e.g.
+        https://cdn.watchguard.com/SoftwareCenter/Files/SSO_AGENT_CLIENT/12_7/WG-Authentication-Client_12_7.msi
+    but has no public version feed. So this script checks two sources and uses the
+    newest version either one reports:
+      1. Microsoft's winget catalog on GitHub (WatchGuard.WatchGuardAuthenticationClient),
+         which records WatchGuard's official download URL and its SHA-256.
+      2. WatchGuard's CDN itself: it asks (HEAD request, no download) whether files exist
+         for the next likely version numbers after the newest known one - e.g. 12_7_1,
+         12_8, 13_0 - so a new release is found even before winget lists it.
+    Then it downloads the MSI (progress logging, stall timeout), checks the SHA-256 when
+    winget supplies one, checks the Authenticode signature (WatchGuard), reads the MSI's
+    ProductVersion / ProductCode / UpgradeCode, and publishes it to
+    <DestinationPath>\<version>\. Writes latest.json last. Keeps -KeepVersions folders.
+
+    If WatchGuard changes its naming and nothing is found, pass the link yourself with
+    -DownloadUrl (copy it from WatchGuard's Software Downloads page for your Firebox).
+
+.PARAMETER DestinationPath
+    Folder (local path or UNC) where the installers are stored.
+    Optional: if it's left out, the folder comes from the repo catalog
+    (OTTOUpdate-Catalog.json): this app's Folder there (its full path), or
+    <RepoRoot>\Applications\WatchGuardAuthClient if the app isn't in the catalog yet. The catalog is found
+    automatically when this script runs from <RepoRoot>\Administrative\Sync;
+    otherwise pass -CatalogPath.
+
+.PARAMETER CatalogPath
+    The repo catalog to take the folder from when -DestinationPath isn't given, e.g.
+    \\fileserver\Software\OTTOUpdate-Catalog.json. Default: <RepoRoot>\OTTOUpdate-Catalog.json
+    when this script is in <RepoRoot>\Administrative\Sync.
+
+.PARAMETER DownloadUrl
+    Optional: use this MSI link instead of looking up the latest version.
+
+.PARAMETER KeepVersions
+    How many version folders to keep. Default: 2.
+
+.PARAMETER Proxy
+    Proxy server for internet access, e.g. http://proxy.contoso.local:8080.
+
+.PARAMETER ProxyUseDefaultCredentials
+    Authenticate to the proxy as the account running the script.
+
+.PARAMETER PageTimeoutSec
+    Seconds to wait for a server to respond / a download to start. Default: 60.
+
+.PARAMETER StallTimeoutSec
+    Give up on a download if no data arrives for this many seconds. Default: 120.
+
+.PARAMETER Force
+    Download and republish even if the share already has the latest version.
+
+.PARAMETER BuildIntunePackage
+    After a successful sync, also build a Microsoft Intune Win32 app package from what is
+    on the share: <IntuneOutputPath>\WatchGuardAuthClient\<version>\ gets WatchGuardAuthClient-<version>.intunewin,
+    Detect-WatchGuardAuthClient.ps1 (custom detection script) and README-WatchGuardAuthClient.txt (the install/uninstall
+    commands, return codes and detection settings to enter in Intune). Nothing is rebuilt
+    if that version's package already exists (unless -Force). Needs <RepoRoot>\Administrative\Shared\OTTOUpdate-Common.ps1 and the app's client script (catalog ClientScript, normally Apps\WatchGuardAuthClient.ps1).
+
+.PARAMETER IntuneOutputPath
+    Where Intune packages are written. Default: <DestinationPath>\Intune
+
+.PARAMETER ClientScriptPath
+    Client script to put in the package. Default: the app's client script from the catalog (Apps\WatchGuardAuthClient.ps1 under <RepoRoot>\Administrative).
+
+.PARAMETER IntuneWinAppUtilPath
+    Path to IntuneWinAppUtil.exe (Microsoft Win32 Content Prep Tool). Default: the repo's
+    shared copy, <RepoRoot>\Tools\IntuneWinAppUtil.exe (<RepoRoot> = the parent of
+    -DestinationPath), which Update-IntuneWinAppUtil.ps1 downloads if it's missing.
+
+.EXAMPLE
+    .\Sync\WatchGuardAuthClient.ps1 -DestinationPath '\\fileserver\Software\Applications\WatchGuardAuthClient'
+
+.EXAMPLE
+    # Sync, then build the Intune package (.intunewin + detection script + README)
+    .\Sync\WatchGuardAuthClient.ps1 -DestinationPath '\\fileserver\Software\Applications\WatchGuardAuthClient' -BuildIntunePackage
+#>
+[CmdletBinding()]
+param(
+    [string]$DestinationPath,
+
+    [string]$CatalogPath,
+
+    [string]$DownloadUrl,
+
+    [ValidateRange(1, 20)]
+    [int]$KeepVersions = 2,
+
+    [string]$Proxy,
+
+    [switch]$ProxyUseDefaultCredentials,
+
+    [ValidateRange(10, 600)]
+    [int]$PageTimeoutSec = 60,
+
+    [ValidateRange(30, 1800)]
+    [int]$StallTimeoutSec = 120,
+
+    [switch]$Force,
+
+    # Intune Win32 package (see Shared\OTTOUpdate-Common.ps1)
+    [switch]$BuildIntunePackage,
+    [string]$IntuneOutputPath,
+    [string]$ClientScriptPath,
+    [string]$IntuneWinAppUtilPath
+)
+$script:SyncFailed = $false
+
+# --- This app's definition -------------------------------------------------------------
+# What OTTOUpdate needs to know about the app: its name, its scripts, and how Intune installs,
+# detects and uninstalls it. It's copied into the repo catalog (OTTOUpdate-Catalog.json) the
+# first time the app is synced (or by 'OTTOUpdate-Server.ps1 Register'); after that the
+# catalog's copy is the one used, so change it there (e.g. with the catalog editor).
+$OTTOAppDefinition = @{
+    AppId        = 'WatchGuardAuthClient'
+    Name         = 'WatchGuard Authentication Client'
+    SyncScript   = 'Sync\WatchGuardAuthClient.ps1'
+    ClientScript = 'Apps\WatchGuardAuthClient.ps1'
+    Intune       = @{
+        # Install command arguments after the script name. '-SourcePath .' becomes the repo path
+        # plus the package's own copy as the fallback.
+        InstallCommand  = '-SourcePath . -Install'
+        InstallVariants = @()
+        # The app's Programs and Features entries (regular expressions), for detection logging and uninstall
+        Match           = @{ Pattern = '^WatchGuard Authentication Client'; Exclude = ''; KeyPattern = ''; Exe = '' }
+        Detection       = @{
+            # How it's detected, as written in Detect.log. Empty = the built-in check of the
+            # Programs and Features entry (Match.Pattern) and, if newer, Match.Exe's file version
+            Description     = 'MSI upgrade code, then Programs and Features entry'
+            # Several versions side by side, each compared with its own repo version ($Required)
+            SeveralVersions = $false
+            # What $Required is when the detection script's $Required line is left at $null
+            DefaultRequired = '@()'
+            # Runs before the repo is read; may Pass or Fail straight away
+            PreCheck        = ''
+            # Sets $have when the repo can't be read. Empty = the Programs and Features check
+            Offline         = ''
+            # The check: compares what's installed with $Manifest (the repo's latest.json) and
+            # ends with Test-Current / Test-CurrentSet. Empty = the built-in check
+            Code            = @'
+$best = @(Get-RelatedProducts $Manifest.UpgradeCode) + @(Get-Uninstall | Where-Object { $_.Name -match $App.Pattern }) |
+        Where-Object { $_.Version } | Sort-Object Version -Descending | Select-Object -First 1
+Test-Current $AppName $best.VersionText $Manifest.Version
+'@
+        }
+        Uninstall       = @{
+            # Silent arguments for uninstallers that aren't MSI
+            ExeArgs      = ''
+            # A reason the app can't be uninstalled (the uninstall script then only logs it)
+            NotSupported = ''
+            # Runs instead of removing the matching Programs and Features entries
+            Code         = ''
+        }
+    }
+    Tasks        = @{}
+}
+
+# --- Where to sync: -DestinationPath, or this app's folder from the repo catalog ----------
+if (-not $CatalogPath) {
+    # This script in <RepoRoot>\Administrative\Sync -> <RepoRoot>\OTTOUpdate-Catalog.json
+    $adminDir = Split-Path $PSScriptRoot -Parent
+    if ((Split-Path $PSScriptRoot -Leaf) -eq 'Sync' -and (Split-Path $adminDir -Leaf) -eq 'Administrative') {
+        $CatalogPath = Join-Path (Split-Path $adminDir -Parent) 'OTTOUpdate-Catalog.json'
+    }
+}
+if (-not $DestinationPath) {
+    if (-not $CatalogPath -or -not (Test-Path -LiteralPath $CatalogPath)) {
+        Write-Host ("No -DestinationPath was given and no repo catalog was found" + $(if ($CatalogPath) { " at $CatalogPath" }) + ". " +
+                    "Pass -DestinationPath <share>\WatchGuardAuthClient, or -CatalogPath <RepoRoot>\OTTOUpdate-Catalog.json " +
+                    "(found automatically when this script runs from <RepoRoot>\Administrative\Sync).") -ForegroundColor Red
+        exit 1
+    }
+    try { $catalogData = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $CatalogPath).ProviderPath) | ConvertFrom-Json }
+    catch { Write-Host "The repo catalog $CatalogPath can't be read: $($_.Exception.Message). Pass -DestinationPath instead." -ForegroundColor Red; exit 1 }
+    $catalogEntry = @($catalogData.Apps) | Where-Object { $_ -and [string]$_.AppId -eq 'WatchGuardAuthClient' } | Select-Object -First 1
+    $catalogFolder = if ($catalogEntry -and $catalogEntry.Folder) { [string]$catalogEntry.Folder } else { 'Applications\WatchGuardAuthClient' }
+    # Folder is the app's full path (e.g. \\fileserver\Software\Applications\Chrome); older catalogs hold a name under the repo root
+    $DestinationPath = if ($catalogFolder -match '^\\\\' -or [IO.Path]::IsPathRooted($catalogFolder)) { $catalogFolder }
+                       else { Join-Path (Split-Path (Resolve-Path -LiteralPath $CatalogPath).ProviderPath -Parent) $catalogFolder }
+    Write-Host ("-DestinationPath from the repo catalog: $DestinationPath" + $(if (-not $catalogEntry) { " (WatchGuardAuthClient isn't in the catalog yet; it's added after this sync writes latest.json)" }))
+}
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
+try   { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13 }
+catch { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 }
+
+$WingetApi     = 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/w/WatchGuard/WatchGuardAuthenticationClient'
+$WingetRaw     = 'https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/w/WatchGuard/WatchGuardAuthenticationClient'
+$CdnBase       = 'https://cdn.watchguard.com/SoftwareCenter/Files/SSO_AGENT_CLIENT'
+$SignerPattern = 'WatchGuard'
+$UserAgent     = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Sync-WatchGuardAuthClientRepo.ps1'
+
+if ($Proxy) {
+    $PSDefaultParameterValues['Invoke-WebRequest:Proxy'] = $Proxy
+    $PSDefaultParameterValues['Invoke-RestMethod:Proxy'] = $Proxy
+    if ($ProxyUseDefaultCredentials) {
+        $PSDefaultParameterValues['Invoke-WebRequest:ProxyUseDefaultCredentials'] = $true
+        $PSDefaultParameterValues['Invoke-RestMethod:ProxyUseDefaultCredentials'] = $true
+    }
+}
+
+# --- Helpers -----------------------------------------------------------------
+if (-not (Test-Path $DestinationPath)) { New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null }
+$logDir = Join-Path $DestinationPath 'Logs'
+if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+$LogFile = Join-Path $logDir 'Sync-WatchGuardAuthClientRepo.log'
+
+function Write-Log {
+    param([string]$Message, [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO')
+    $line = '{0} [{1}] {2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, $Message
+    # Append to the log without ever failing the run: share the file with other
+    # readers/writers and retry briefly if it's momentarily locked (e.g. antivirus).
+    for ($try = 1; $try -le 10; $try++) {
+        try {
+            $fs = [IO.File]::Open($LogFile, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+            $sw = New-Object IO.StreamWriter($fs, (New-Object Text.UTF8Encoding($false)))
+            try { $sw.WriteLine($line) } finally { $sw.Dispose() }
+            break
+        }
+        catch { Start-Sleep -Milliseconds (100 * $try) }
+    }
+    switch ($Level) {
+        'WARN'  { Write-Warning $Message }
+        'ERROR' { Write-Host $line -ForegroundColor Red }
+        default { Write-Host $line }
+    }
+}
+
+# --- Only one sync per share at a time -----------------------------------------
+# Holds an exclusive lock file for the whole run; a second run exits quietly.
+$script:SyncLock = $null
+try {
+    $script:SyncLock = [IO.File]::Open((Join-Path $logDir '.sync.lock'), [IO.FileMode]::OpenOrCreate,
+                                       [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+}
+catch {
+    Write-Log 'Another run of this sync is already in progress for this share. Exiting.' 'WARN'
+    exit 0
+}
+
+function Get-ErrorDetail($ErrorRecord) {
+    $msgs = @(); $e = $ErrorRecord.Exception
+    while ($e) { $msgs += $e.Message; $e = $e.InnerException }
+    return ($msgs | Select-Object -Unique) -join ' --> '
+}
+
+function ConvertTo-Version([string]$Text) {
+    $m = [regex]::Match([string]$Text, '\d+(\.\d+){0,3}')
+    if (-not $m.Success) { return $null }
+    $parts = @($m.Value.Split('.')) + @('0', '0', '0', '0') | Select-Object -First 4
+    return [version]($parts -join '.')
+}
+
+function Get-Text([string]$Url) {
+    $content = (Invoke-WebRequest -Uri $Url -UseBasicParsing -UserAgent $UserAgent -TimeoutSec $PageTimeoutSec).Content
+    if ($content -is [byte[]]) { return [Text.Encoding]::UTF8.GetString($content) }
+    return [string]$content
+}
+
+function Test-UrlExists([string]$Url) {
+    try {
+        $r = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -UserAgent $UserAgent -TimeoutSec $PageTimeoutSec
+        return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300)
+    }
+    catch { return $false }
+}
+
+function Get-CdnUrl([string]$Tag) { "$CdnBase/$Tag/WG-Authentication-Client_$Tag.msi" }   # Tag like 12_7 or 12_7_1
+
+function Get-FromWinget {
+    # Newest version in Microsoft's winget catalog: @{ Version; Url; Sha256 } or $null
+    $headers = @{ 'User-Agent' = $UserAgent; 'Accept' = 'application/vnd.github+json' }
+    $listing = Invoke-RestMethod -Uri $WingetApi -Headers $headers -TimeoutSec $PageTimeoutSec
+    $dir = @($listing) | ForEach-Object { $_ } |
+        Where-Object { $_.type -eq 'dir' -and (ConvertTo-Version $_.name) } |
+        Sort-Object { ConvertTo-Version $_.name } -Descending | Select-Object -First 1
+    if (-not $dir) { return $null }
+    $yaml = Get-Text "$WingetRaw/$($dir.name)/WatchGuard.WatchGuardAuthenticationClient.installer.yaml"
+    $url  = [regex]::Match($yaml, '(?m)InstallerUrl:\s*(\S+)').Groups[1].Value
+    $sha  = [regex]::Match($yaml, '(?m)InstallerSha256:\s*([0-9A-Fa-f]{64})').Groups[1].Value.ToUpper()
+    if (-not $url) { return $null }
+    return @{ Version = [string]$dir.name; Url = $url; Sha256 = $sha; Source = 'winget catalog' }
+}
+
+function Get-FromCdnProbe([version]$From) {
+    # Asks WatchGuard's CDN about the next likely versions after $From; newest hit wins
+    $cands = @()
+    $maj = $From.Major; $min = $From.Minor; $pat = [math]::Max(0, $From.Build)
+    foreach ($p in ($pat + 1)..($pat + 3)) { $cands += "$($maj)_$($min)_$p" }
+    foreach ($m in ($min + 1)..($min + 3)) { $cands += "$($maj)_$m"; $cands += "$($maj)_$($m)_1" }
+    $cands += "$($maj + 1)_0"; $cands += "$($maj + 1)_1"
+    $best = $null
+    foreach ($tag in $cands) {
+        $u = Get-CdnUrl $tag
+        if (Test-UrlExists $u) {
+            $v = ConvertTo-Version ($tag -replace '_', '.')
+            Write-Log "  CDN has $tag"
+            if (-not $best -or $v -gt (ConvertTo-Version $best.Version)) { $best = @{ Version = ($tag -replace '_', '.'); Url = $u; Sha256 = $null; Source = 'WatchGuard CDN' } }
+        }
+    }
+    return $best
+}
+
+function Save-Download([string]$Url, [string]$OutFile) {
+    # Streams a file to disk; gives up if no data arrives for $StallTimeoutSec.
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    if ($Proxy) {
+        $wp = New-Object System.Net.WebProxy($Proxy)
+        $wp.UseDefaultCredentials = [bool]$ProxyUseDefaultCredentials
+        $handler.Proxy = $wp
+        $handler.UseProxy = $true
+    }
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [System.Threading.Timeout]::InfiniteTimeSpan
+    [void]$client.DefaultRequestHeaders.TryAddWithoutValidation('User-Agent', $UserAgent)
+    $resp = $in = $out = $null
+    try {
+        $task = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead)
+        if (-not $task.Wait([TimeSpan]::FromSeconds($PageTimeoutSec))) { throw "No response within $PageTimeoutSec seconds." }
+        $resp = $task.Result
+        if (-not $resp.IsSuccessStatusCode) { throw "Server returned $([int]$resp.StatusCode) $($resp.ReasonPhrase)." }
+        $total = $resp.Content.Headers.ContentLength
+        $in    = $resp.Content.ReadAsStreamAsync().Result
+        $out   = [IO.File]::Create($OutFile)
+        $buf   = New-Object byte[] (1MB)
+        $done  = [long]0
+        while ($true) {
+            $read = $in.ReadAsync($buf, 0, $buf.Length)
+            if (-not $read.Wait([TimeSpan]::FromSeconds($StallTimeoutSec))) {
+                throw ("Download stalled: no data for {0} s after {1:N0} MB." -f $StallTimeoutSec, ($done / 1MB))
+            }
+            $n = $read.Result
+            if ($n -le 0) { break }
+            $out.Write($buf, 0, $n)
+            $done += $n
+        }
+        if ($total -and $done -ne $total) { throw ("Download incomplete: got {0:N0} of {1:N0} bytes." -f $done, $total) }
+    }
+    catch {
+        if ($out) { $out.Dispose(); $out = $null }
+        Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
+        throw
+    }
+    finally {
+        if ($out)  { $out.Dispose() }
+        if ($in)   { $in.Dispose() }
+        if ($resp) { $resp.Dispose() }
+        $client.Dispose()
+    }
+}
+
+function Get-MsiProperty([string]$Path, [string]$Property) {
+    $installer = New-Object -ComObject WindowsInstaller.Installer
+    $db = $view = $rec = $null
+    try {
+        $db   = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 0))
+        $view = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @("SELECT Value FROM Property WHERE Property='$Property'"))
+        $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
+        $rec  = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+        $val  = if ($rec) { $rec.GetType().InvokeMember('StringData', 'GetProperty', $null, $rec, 1) } else { $null }
+        $view.GetType().InvokeMember('Close', 'InvokeMethod', $null, $view, $null) | Out-Null
+        return $val
+    }
+    finally {
+        foreach ($o in @($rec, $view, $db, $installer)) {
+            if ($o) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($o) }
+        }
+    }
+}
+
+# --- Main --------------------------------------------------------------------
+$tempDir = Join-Path $env:TEMP "wgauth-sync-$([guid]::NewGuid().ToString('N'))"
+try {
+    # latest.json as it was before this run, for the repo catalog (see the end of the script)
+    $script:ManifestBefore = $null
+    try {
+        $manifestBeforePath = Join-Path $DestinationPath 'latest.json'
+        if (Test-Path -LiteralPath $manifestBeforePath) { $script:ManifestBefore = Get-Content -LiteralPath $manifestBeforePath -Raw }
+    }
+    catch { }
+    Write-Log "---- Sync started. Destination: $DestinationPath"
+    New-Item -ItemType Directory -Path $tempDir | Out-Null
+
+    $manifestPath = Join-Path $DestinationPath 'latest.json'
+    $existing = $null
+    if (Test-Path $manifestPath) {
+        try { $existing = Get-Content $manifestPath -Raw | ConvertFrom-Json }
+        catch { Write-Log "Existing manifest is unreadable and will be replaced: $_" 'WARN' }
+    }
+    Write-Log "Version on share: $(if ($existing) { $existing.Version } else { 'none' })"
+
+    # --- Find the latest version ----------------------------------------------
+    if ($DownloadUrl) {
+        $latest = @{ Version = $null; Url = $DownloadUrl; Sha256 = $null; Source = '-DownloadUrl' }
+    }
+    else {
+        $wg = $null
+        try { $wg = Get-FromWinget; if ($wg) { Write-Log "winget catalog: $($wg.Version) ($($wg.Url))" } }
+        catch { Write-Log "Couldn't read the winget catalog: $(Get-ErrorDetail $_)" 'WARN' }
+
+        # Probe the CDN for anything newer than the newest version we know of
+        $known = @($wg.Version, $existing.Version, '12.7') | Where-Object { $_ } |
+                 Sort-Object { ConvertTo-Version $_ } -Descending | Select-Object -First 1
+        Write-Log "Checking WatchGuard's CDN for versions newer than $known..."
+        $cdn = Get-FromCdnProbe (ConvertTo-Version $known)
+
+        $latest = @($wg, $cdn) | Where-Object { $_ } | Sort-Object { ConvertTo-Version $_.Version } -Descending | Select-Object -First 1
+        if (-not $latest) { throw 'Could not find the WatchGuard Authentication Client download. Use -DownloadUrl.' }
+    }
+    Write-Log "Latest: $(if ($latest.Version) { $latest.Version } else { '(from link)' }) via $($latest.Source): $($latest.Url)"
+
+    if (-not $Force -and $existing -and $latest.Version -and $existing.SourceUrl -eq $latest.Url -and
+        (Test-Path -LiteralPath (Join-Path $DestinationPath $existing.FileName))) {
+        Write-Log 'Share already has this version. Nothing to do.'
+        exit 0
+    }
+
+    # --- Download and verify --------------------------------------------------
+    $fileName = Split-Path ([Uri]$latest.Url).AbsolutePath -Leaf
+    $local = Join-Path $tempDir $fileName
+    Write-Log "Downloading $fileName"
+    Save-Download -Url $latest.Url -OutFile $local
+    $hash = (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash
+    if ($latest.Sha256) {
+        if ($hash -ne $latest.Sha256) { throw "SHA-256 mismatch. The winget catalog lists $($latest.Sha256), got $hash." }
+        Write-Log 'SHA-256 matches the winget catalog.'
+    }
+    else { Write-Log 'No published SHA-256 for this file; relying on the signature check.' }
+    $sig = Get-AuthenticodeSignature -FilePath $local
+    if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch $SignerPattern) {
+        throw "Signature check failed (status: $($sig.Status), signer: $($sig.SignerCertificate.Subject))."
+    }
+    $pv   = Get-MsiProperty $local 'ProductVersion'
+    $pc   = ([string](Get-MsiProperty $local 'ProductCode')).ToUpper()
+    $uc   = ([string](Get-MsiProperty $local 'UpgradeCode')).ToUpper()
+    $name = Get-MsiProperty $local 'ProductName'
+    Write-Log "$name $pv  ProductCode $pc  UpgradeCode $uc  signed by $($sig.SignerCertificate.Subject)"
+
+    if ($existing -and (ConvertTo-Version $pv) -lt (ConvertTo-Version $existing.Version) -and -not $Force) {
+        Write-Log "Downloaded $pv is older than the share's $($existing.Version). Not publishing." 'WARN'
+        exit 0
+    }
+
+    # --- Publish -------------------------------------------------------------
+    $verDir  = Join-Path $DestinationPath $pv
+    $staging = "$verDir.partial"
+    if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+    New-Item -ItemType Directory -Path $staging | Out-Null
+    Copy-Item -LiteralPath $local -Destination (Join-Path $staging $fileName)
+    if (Test-Path $verDir) { Remove-Item $verDir -Recurse -Force }
+    Rename-Item -Path $staging -NewName $pv
+
+    $manifest = [ordered]@{
+        Product     = 'WatchGuard Authentication Client'
+        ProductName = $name
+        Version     = $pv
+        ProductCode = $pc
+        UpgradeCode = $uc
+        FileName    = Join-Path $pv $fileName
+        Sha256      = $hash
+        SourceUrl   = $latest.Url
+        UpdatedAt   = (Get-Date).ToString('o')
+    }
+    $tmp = "$manifestPath.tmp"
+    $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $tmp -Encoding UTF8
+    Move-Item -Path $tmp -Destination $manifestPath -Force
+    Write-Log "Published $name $pv and updated manifest."
+
+    Get-ChildItem -Path $DestinationPath -Directory |
+        Where-Object { $_.Name -match '^\d+(\.\d+){1,3}$' } |
+        Sort-Object { ConvertTo-Version $_.Name } -Descending |
+        Select-Object -Skip $KeepVersions |
+        ForEach-Object { Write-Log "Removing old version folder $($_.Name)"; Remove-Item $_.FullName -Recurse -Force }
+    Get-ChildItem -Path $DestinationPath -Directory -Filter '*.partial' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Log '---- Sync finished successfully.'
+    exit 0
+}
+catch {
+    $script:SyncFailed = $true
+    Write-Log "Sync failed: $(Get-ErrorDetail $_)" 'ERROR'
+    exit 1
+}
+finally {
+    Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    # --- Optional: Intune Win32 package (only after a successful sync) ------------
+    if ($BuildIntunePackage -and -not $script:SyncFailed) {
+        try {
+            $intuneHelper = Join-Path (Split-Path $PSScriptRoot -Parent) 'Shared\OTTOUpdate-Common.ps1'
+            if (-not (Test-Path -LiteralPath $intuneHelper)) { throw "OTTOUpdate-Common.ps1 was not found at $intuneHelper. Keep this script in <RepoRoot>\Administrative\Sync and the library in <RepoRoot>\Administrative\Shared." }
+            . $intuneHelper
+            Invoke-OTTOIntunePackageBuild -AppId 'WatchGuardAuthClient' -DestinationPath $DestinationPath -OutputPath $IntuneOutputPath `
+                -ClientScriptPath $ClientScriptPath -IntuneWinAppUtilPath $IntuneWinAppUtilPath -Force:$Force -Log { param($m) Write-Log $m } `
+                -Definition $OTTOAppDefinition -CatalogPath $CatalogPath
+        }
+        catch {
+            Write-Log "Intune package build failed: $($_.Exception.Message)" 'ERROR'
+            $script:IntuneFailed = $true
+        }
+    }
+    # --- Record this run in the repo catalog (OTTOUpdate-Catalog.json) --------------------
+    # Only when this script is run on its own; under OTTOUpdate-Server.ps1 Sync the server records it.
+    $catalogHelper = Join-Path (Split-Path $PSScriptRoot -Parent) 'Shared\OTTOUpdate-Common.ps1'
+    if (Test-Path -LiteralPath $catalogHelper) {
+        try {
+            . $catalogHelper
+            Update-OTTOCatalogEntry -AppId 'WatchGuardAuthClient' -DestinationPath $DestinationPath -ManifestBefore $script:ManifestBefore `
+                -Failed ([bool]($script:SyncFailed -or $script:IntuneFailed)) -Script 'Sync\WatchGuardAuthClient.ps1' `
+                -BoundParameters $PSBoundParameters -CatalogPath $CatalogPath -Definition $OTTOAppDefinition -ScriptPath $PSCommandPath -Log { param($m, $l) Write-Log $m $l }
+        }
+        catch { Write-Log "Couldn't update the repo catalog: $($_.Exception.Message)" 'WARN' }
+    }
+    # Release the one-sync-per-share lock (it would otherwise stay held until this PowerShell
+    # window closes, so a second run in the same window would think a sync is still running)
+    if ($script:SyncLock) { $script:SyncLock.Dispose(); $script:SyncLock = $null }
+    if ($script:IntuneFailed) { exit 1 }
+}
