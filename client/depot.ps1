@@ -124,6 +124,7 @@ ADD APPLICATIONS TO THE REPOSITORY                                              
                                      [--uninstall "..."] [--detect "regex"] [--installer FILE --version V]
   app upload <id> <file> [--version V]   Upload an installer as a new version [--replace]
   app remove <id> [--delete-files]   Remove an application [--yes]
+  app add-catalog [<id>...]          Add the applications bundled with AppDepot [--check] [--overwrite] [--dry-run]
 
 CLIENT
   config                             Show configuration
@@ -144,7 +145,7 @@ EXIT CODES
     'install' = "depot install <id> [<id>...] [--version V] [--force] [--keep]`n`nInstalls applications silently from the repository. Equivalent cmdlet: Install-DepotApp.`n  --version V   install a specific stored version (default latest)`n  --force       reinstall even if the same or newer version is installed`n  --keep        keep the installer in the local cache"
     'upgrade' = "depot upgrade                 list available updates`ndepot upgrade <id> [<id>...]  update specific applications`ndepot upgrade --all           update everything`n`nEquivalent cmdlets: Get-DepotUpdate, Update-DepotApp."
     'config'  = "depot config                        show configuration`ndepot config set <name> <value>     change a setting`n`nNames: ServerUrl, TransferMethod (Auto|Unc|Http), CachePath, LogPath, TimeoutSec,`n       InstallTimeoutMinutes, KeepInstallers (true|false), ApiKey`nExample: depot config set ServerUrl http://appdepot.corp.example.com:8080"
-    'app'     = "depot app search <query>`ndepot app add <wingetId> [--category C] [--arch x64|x86|arm64] [--check] [--replace] [--yes]`ndepot app add --file <manifest.yaml> [--check] [--replace] [--yes]`ndepot app test <wingetId> | --file <manifest.yaml> | --id <appId>`ndepot app template winget|github|web|json|url|multi|adobe|manual`ndepot app create <id> --name `"Name`" [--publisher P] [--category C] [--type msi|exe|inno|nullsoft|burn|msp|msix] [--args `"...`"] [--uninstall `"...`"] [--setup-file setup.exe] [--detect `"regex`"] [--installer FILE] [--version V]`ndepot app upload <id> <file> [--version V] [--replace]`ndepot app remove <id> [--delete-files] [--yes]`n`nThe server checks every source of an application and prefers an MSI installer.`nManual applications are not downloaded: create them with 'app create' and add versions with 'app upload' (the version is read from MSI files).`n'app test' and 'app add' show which installer will be used before anything is saved.`n--check downloads the application immediately. Requires the API key (depot config set ApiKey <key>)."
+    'app'     = "depot app search <query>`ndepot app add <wingetId> [--category C] [--arch x64|x86|arm64] [--check] [--replace] [--yes]`ndepot app add --file <manifest.yaml> [--check] [--replace] [--yes]`ndepot app test <wingetId> | --file <manifest.yaml> | --id <appId>`ndepot app template winget|github|web|json|url|multi|adobe|manual`ndepot app create <id> --name `"Name`" [--publisher P] [--category C] [--type msi|exe|inno|nullsoft|burn|msp|msix] [--args `"...`"] [--uninstall `"...`"] [--setup-file setup.exe] [--detect `"regex`"] [--installer FILE] [--version V]`ndepot app upload <id> <file> [--version V] [--replace]`ndepot app remove <id> [--delete-files] [--yes]`ndepot app add-catalog [<id>...] [--overwrite] [--check] [--dry-run]`n`nThe server checks every source of an application and prefers an MSI installer.`nManual applications are not downloaded: create them with 'app create' and add versions with 'app upload' (the version is read from MSI files).`n'app test' and 'app add' show which installer will be used before anything is saved.`n--check downloads the application immediately. Requires the API key (depot config set ApiKey <key>)."
     'server'  = "depot server check [<id>...] [--force] [--wait]`ndepot server schedule global `"0 3 * * *`"`ndepot server schedule <id> `"0 */6 * * *`" | manual | global`n`nCron format: minute hour day-of-month month day-of-week. Requires the API key:`n  depot config set ApiKey <key>   (or set APPDEPOT_API_KEY)"
 }
 
@@ -342,6 +343,19 @@ try {
                     }
                     $r = Remove-DepotApp -Id $subArgs[0] -DeleteFiles:([bool]$opts.'delete-files') -Confirm:$false
                     Write-Info "Removed $($r.deleted)." Green
+                }
+                'add-catalog' {
+                    $r = Add-DepotCatalogApp -Id $subArgs -Overwrite:([bool]$opts.overwrite) -CheckNow:([bool]$opts.check) -WhatIf:([bool]$opts.'dry-run')
+                    if ($json) { $r | ConvertTo-Json -Depth 4; exit 0 }
+                    $labels = [ordered]@{ Added = 'Added'; Updated = 'Updated (old file kept as .bak)'; Unchanged = 'Already up to date'
+                        Kept = 'Kept the server''s version (differs; --overwrite replaces it)'; SkippedRemoved = 'Removed earlier (name it to add it back)'; Errors = 'Errors' }
+                    foreach ($k in $labels.Keys) {
+                        if (@($r.$k).Count) { Write-Info ("{0} ({1}): {2}" -f $labels[$k], @($r.$k).Count, (@($r.$k) -join ', ')) }
+                    }
+                    if ($r.WhatIf) { Write-Info 'Dry run - nothing was changed.' Yellow }
+                    elseif (@($r.Queued).Count) { Write-Info ("Downloading {0} application(s) on the server; they appear in the catalog when done." -f @($r.Queued).Count) Green }
+                    elseif (@($r.Added).Count + @($r.Updated).Count) { Write-Info "They appear in the catalog after the next check: depot server check" Green }
+                    if (@($r.Errors).Count) { exit 1 }
                 }
                 default { Write-Host $help['app']; exit 2 }
             }

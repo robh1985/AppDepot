@@ -1,6 +1,9 @@
 # Converted sync scripts
 
 Every script in `SyncScripts/` has been converted to AppDepot manifests in `server/manifests/`.
+They ship with the server; add them with `Add-DepotCatalogApp -CheckNow` (or
+`appdepot-server app add-catalog --check`), see
+[adding-applications.md](adding-applications.md#the-bundled-catalog).
 The scripts' methods (where versions come from, how files are verified, how they are installed
 and detected) are kept; AppDepot's server then does the downloading, version history, Intune
 packaging and database work that each script did on its own.

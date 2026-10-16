@@ -82,9 +82,11 @@ or a PowerShell module.
 ```powershell
 cd server\deploy
 .\Install-AppDepotServer.ps1 -RepositoryPath D:\AppDepot\Repository `
-    -AllowedSubnets 10.10.0.0/16, 10.20.0.0/16 -NssmPath C:\Tools\nssm.exe
-& C:\AppDepot\venv\Scripts\appdepot-server.exe --config C:\AppDepot\appdepot.yaml check
+    -AllowedSubnets 10.10.0.0/16, 10.20.0.0/16 -NssmPath C:\Tools\nssm.exe -CheckNow
 ```
+
+The installer adds the 53 bundled applications and `-CheckNow` downloads them. On an existing
+server, re-run the installer or use `Add-DepotCatalogApp -CheckNow` from any client.
 
 Open `http://<server>:8080/` for the dashboard. Linux and Docker are covered in
 [docs/server.md](docs/server.md).

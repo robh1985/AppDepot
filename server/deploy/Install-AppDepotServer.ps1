@@ -12,7 +12,11 @@
     4. Opens the API port in Windows Firewall, optionally limited to your VLAN subnets
     5. Registers AppDepot as a Windows service (NSSM) or, without NSSM, a startup scheduled task
 
-    Re-running the script upgrades the installation and keeps the existing configuration.
+    6. Adds the bundled application catalog (server\manifests) to the manifests folder
+
+    Re-running the script upgrades the installation and keeps the existing configuration. New
+    applications from the bundled catalog are added; manifests you have edited or removed are left
+    alone (use -UpdateCatalog to replace edited ones, -SkipCatalog to add none).
 
 .PARAMETER InstallPath
     Program folder (code, virtual environment, config, database). Default C:\AppDepot
@@ -39,6 +43,16 @@
 .PARAMETER NssmPath
     Path to nssm.exe to run AppDepot as a real Windows service.
 
+.PARAMETER SkipCatalog
+    Do not add the bundled applications.
+
+.PARAMETER UpdateCatalog
+    Also replace installed manifests that differ from the bundled ones (each old file is kept as
+    *.yaml.bak).
+
+.PARAMETER CheckNow
+    Download the newly added applications straight away instead of waiting for the schedule.
+
 .EXAMPLE
     .\Install-AppDepotServer.ps1 -RepositoryPath E:\AppDepot -AllowedSubnets 10.10.0.0/16,10.20.0.0/16 -NssmPath C:\Tools\nssm.exe
 #>
@@ -51,7 +65,10 @@ param(
     [string[]] $AllowedSubnets = @('Any'),
     [string] $PublicHostName = ([System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName),
     [string] $PythonPath,
-    [string] $NssmPath
+    [string] $NssmPath,
+    [switch] $SkipCatalog,
+    [switch] $UpdateCatalog,
+    [switch] $CheckNow
 )
 $ErrorActionPreference = 'Stop'
 $source = Split-Path -Parent $PSScriptRoot     # ...\server
@@ -78,7 +95,7 @@ if ($LASTEXITCODE) { throw 'pip install failed' }
 # ------------------------------------------------------------------ configuration
 Write-Step 'Writing configuration'
 $manifests = Join-Path $InstallPath 'manifests'
-if (-not (Test-Path $manifests)) { Copy-Item -Path (Join-Path $source 'manifests') -Destination $manifests -Recurse }
+New-Item -ItemType Directory -Path $manifests -Force | Out-Null
 $config = Join-Path $InstallPath 'appdepot.yaml'
 if (-not (Test-Path $config)) {
     $bytes = New-Object byte[] 32
@@ -124,6 +141,12 @@ if ($AllowedSubnets -notcontains 'Any') {
 # ------------------------------------------------------------------ service
 $exe = "$venv\Scripts\appdepot-server.exe"
 & "$venv\Scripts\python.exe" -m appdepot_server -c $config sync | Out-Null
+if (-not $SkipCatalog) {
+    Write-Step 'Adding the bundled application catalog'
+    $catalogArgs = @('-m', 'appdepot_server', '-c', $config, 'app', 'add-catalog')
+    if ($UpdateCatalog) { $catalogArgs += '--overwrite' }
+    & "$venv\Scripts\python.exe" @catalogArgs | ForEach-Object { "    $_" }
+}
 if ($NssmPath) {
     Write-Step 'Registering Windows service "AppDepot" (NSSM)'
     if (Get-Service AppDepot -ErrorAction SilentlyContinue) { & $NssmPath stop AppDepot | Out-Null; & $NssmPath remove AppDepot confirm | Out-Null }
@@ -151,7 +174,15 @@ try {
     $h = Invoke-RestMethod "http://localhost:$Port/api/v1/health" -UseBasicParsing
     Write-Host "`nAppDepot $($h.version) is running: http://${PublicHostName}:$Port  (dashboard), /docs (API)" -ForegroundColor Green
     Write-Host "Repository share: \\$PublicHostName\$ShareName"
-    Write-Host "Next: review $config and the manifests in $manifests, then run:"
-    Write-Host "  & '$exe' --config '$config' check"
+    if ($CheckNow) {
+        Start-Process -FilePath $exe -ArgumentList "--config `"$config`" check" -WindowStyle Hidden `
+            -RedirectStandardOutput "$InstallPath\Logs\first-check.log" -RedirectStandardError "$InstallPath\Logs\first-check.err.log"
+        Write-Host "Downloading all applications in the background ($InstallPath\Logs\first-check.log)."
+        Write-Host "Follow it with: & '$exe' --config '$config' events"
+    }
+    else {
+        Write-Host "Next: review $config and the manifests in $manifests, then download everything with:"
+        Write-Host "  & '$exe' --config '$config' check"
+    }
 }
 catch { Write-Warning "The server did not answer yet. Check $InstallPath\Logs." }

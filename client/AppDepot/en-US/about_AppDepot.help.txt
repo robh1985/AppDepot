@@ -61,6 +61,8 @@ CMDLETS
                                 (manual applications: New-DepotApp -Id .. -Name ..)
         Remove-DepotApp         Remove an application (optionally its files)
         Get-DepotManifestTemplate  Manifest templates for hand-written definitions
+        Add-DepotCatalogApp     Add the applications bundled with AppDepot
+                                (-WhatIf to preview, -CheckNow to download them)
 
     Client
         Get-DepotConfig / Set-DepotConfig / Test-DepotConnection

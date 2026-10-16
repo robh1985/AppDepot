@@ -23,6 +23,7 @@ _Generated from the module's comment-based help. The same text is available with
 | [Publish-DepotInstaller](#publish-depotinstaller) | Uploads an installer file to the repository as a new version of an application. (Administrative) |
 | [Remove-DepotApp](#remove-depotapp) | Removes an application from the repository. (Administrative) |
 | [Get-DepotManifestTemplate](#get-depotmanifesttemplate) | Returns a manifest template for writing an application definition by hand. |
+| [Add-DepotCatalogApp](#add-depotcatalogapp) | Adds the applications that ship with AppDepot to the repository. (Administrative) |
 | [Get-DepotConfig](#get-depotconfig) | Shows the AppDepot client configuration. |
 | [Set-DepotConfig](#set-depotconfig) | Changes the AppDepot client configuration. |
 | [Test-DepotConnection](#test-depotconnection) | Tests the connection to the AppDepot server and the repository share. |
@@ -249,6 +250,9 @@ If the same or a newer version is already installed the application is skipped u
 -Force is used. Machine-wide installers require an elevated session.
 
 Archive installers (.zip, e.g. Adobe Acrobat) are extracted and their setup file is run.
+Applications listed as requirements (installer.requires, e.g. the Visual C++ runtime) are
+installed first when they are missing.
+
 Update patches (.msp) are only applied when the product they update is installed. When an
 application names an update patch (update_with), the newest patch is applied right after a
 new install, so the computer ends up on the latest version.
@@ -859,6 +863,55 @@ Get-DepotManifestTemplate web | Set-Content .\Contoso.App.yaml
 ```
 
 **Output:** `System.String`
+
+## Add-DepotCatalogApp
+
+Adds the applications that ship with AppDepot to the repository. (Administrative)
+
+```powershell
+Add-DepotCatalogApp [-Id <String[]>] [-Overwrite] [-CheckNow] [-WhatIf] [-Confirm]
+```
+
+### Description
+
+```text
+The AppDepot server includes a catalog of ready-made application manifests (the converted
+sync scripts: 7-Zip, Chrome, Edge, Firefox, Adobe Acrobat/Reader, .NET, Visual C++, Java,
+Python, Zoom and more; see docs/converted-sync-scripts.md). This copies them into the
+server's manifests folder and loads them into the database.
+
+New applications are added. Manifests that are already installed and identical are left
+alone, manifests that differ (edited on the server, or from an older AppDepot release) are
+kept unless -Overwrite is used, and applications removed with Remove-DepotApp are not added
+back unless you name them with -Id.
+
+The applications appear in Get-DepotApp and the GUI catalog once the server has downloaded
+a version: use -CheckNow, Invoke-DepotServerCheck, or wait for the schedule.
+Requires the server API key.
+```
+
+### Parameters
+
+| Parameter | Type | Required | Pipeline | Description |
+|---|---|---|---|---|
+| `-Id` | String[] | false | true (ByValue, ByPropertyName) | Only these applications (default: the whole catalog). |
+| `-Overwrite` | SwitchParameter | false | false | Replace installed manifests that differ from the bundled ones. The server keeps each old file as *.yaml.bak. |
+| `-CheckNow` | SwitchParameter | false | false | Download the added applications now (in the background on the server). |
+
+### Examples
+
+```powershell
+Add-DepotCatalogApp -WhatIf
+Shows what would be added, kept or updated.
+```
+
+```powershell
+Add-DepotCatalogApp -CheckNow
+```
+
+```powershell
+Add-DepotCatalogApp -Id Google.Chrome, Microsoft.Edge, Mozilla.Firefox -CheckNow
+```
 
 ## Get-DepotConfig
 

@@ -31,7 +31,7 @@ import yaml
 
 from .config import Config
 from .db import Database
-from .manifest import ManifestError, manifest_sources, upsert_manifest, validate_manifest
+from .manifest import ManifestError, load_manifest_file, manifest_sources, upsert_manifest, validate_manifest
 from .repository import safe_segment
 from .selection import (
     MSI_FAMILY,
@@ -494,3 +494,83 @@ detection:
   display_name: '^App Name'
 """,
 }
+
+
+# --------------------------------------------------------------------------- bundled catalog
+def bundled_manifest_dir() -> Path:
+    """Folder with the manifests that ship with AppDepot (``server/manifests``)."""
+    installed = Path(__file__).resolve().parent / "catalog"     # pip-installed package
+    if installed.is_dir():
+        return installed
+    return Path(__file__).resolve().parent.parent / "manifests"   # source checkout
+
+
+def add_catalog(config: Config, db: Database, *, source_dir: Path | None = None, ids: list[str] | None = None,
+                overwrite: bool = False, dry_run: bool = False) -> dict[str, list]:
+    """Copy bundled (or other) manifests into ``manifests_dir`` and load them into the database.
+
+    * new applications are added;
+    * a manifest identical to the one already installed is left alone;
+    * a manifest that differs from the installed one (edited locally, or from an
+      older AppDepot release) is kept as it is unless ``overwrite`` is set - the
+      replaced file is saved as ``*.yaml.bak``;
+    * applications removed with ``app remove`` (``*.yaml.removed``) are not added back
+      unless they are named in ``ids``.
+    """
+    src = Path(source_dir) if source_dir else bundled_manifest_dir()
+    if not src.is_dir():
+        raise OnboardingError(f"Manifest folder {src} was not found")
+    mdir = config.manifests_dir.resolve()
+    wanted = {i.lower() for i in ids} if ids else None
+    result: dict[str, list] = {"added": [], "updated": [], "unchanged": [], "kept": [], "skipped_removed": [],
+                               "errors": []}
+    with db.session() as s:
+        from .db import Application
+        from sqlalchemy import select
+        known = {a.app_id.lower(): a.manifest_path for a in s.scalars(select(Application))}
+
+    found: set[str] = set()
+    for path in sorted(list(src.glob("*.yaml")) + list(src.glob("*.yml"))):
+        try:
+            m = load_manifest_file(path)
+        except Exception as exc:  # noqa: BLE001
+            result["errors"].append(f"{path.name}: {exc}")
+            continue
+        app_id = m["id"]
+        if wanted is not None and app_id.lower() not in wanted:
+            continue
+        found.add(app_id.lower())
+        existing = known.get(app_id.lower())
+        target = manifest_file_for(config, app_id, existing)
+        retired = target.with_name(target.name + ".removed")
+        if not target.exists() and retired.exists() and wanted is None:
+            result["skipped_removed"].append(app_id)
+            continue
+        if target.exists():
+            try:
+                current = load_manifest_file(target)
+            except Exception:  # noqa: BLE001 - a broken local file counts as different
+                current = None
+            if current == m:
+                result["unchanged"].append(app_id)
+                continue
+            if not overwrite:
+                result["kept"].append(app_id)
+                continue
+            if not dry_run:
+                target.with_name(target.name + ".bak").write_bytes(target.read_bytes())
+            result["updated"].append(app_id)
+        else:
+            result["added"].append(app_id)
+        if not dry_run:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(path.read_bytes())
+            if retired.exists():
+                retired.unlink()
+            upsert_manifest(db, m, str(target))
+    if wanted is not None:
+        result["errors"] += [f"{i}: not in {src}" for i in ids if i.lower() not in found]
+    if not dry_run and (result["added"] or result["updated"]):
+        db.log_event("manifest", f"Catalog import from {src}: {len(result['added'])} added, "
+                                 f"{len(result['updated'])} updated", details=result)
+    return result

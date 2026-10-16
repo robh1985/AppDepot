@@ -71,6 +71,7 @@ Read endpoints are open to the network. Endpoints marked **admin** need the `X-A
 | `POST /apps/{id}/preview` | Preview an application already in the repository |
 | `GET /winget/search?q=&limit=25` | Search the winget catalog; each result has `in_repository` |
 | `GET /winget/packages/{wingetId}?category=&architecture=x64` | Generate a manifest from winget, with `info` (installer types, `msi_available`) and `preview` |
+| `POST /catalog/bundled` | Add the applications bundled with AppDepot. Body: `{"app_ids": [...], "overwrite": false, "dry_run": false, "check": false}`; returns `added`, `updated`, `unchanged`, `kept`, `skipped_removed`, `queued`, `errors` |
 | `GET /templates/{type}` | Manifest template: winget, github, web, json, url, multi, adobe, manual |
 | `DELETE /apps/{id}?delete_files=false` | Remove an application (optionally its files). The manifest file is renamed to `*.removed` |
 | `POST /apps/{id}/check?force=false&wait=false` | Check now; `wait=true` returns the result |

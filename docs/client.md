@@ -119,7 +119,7 @@ parameters and examples, and `Get-Help about_AppDepot` for the conceptual overvi
 | Catalog | `Get-DepotApp`, `Find-DepotApp`, `Get-DepotAppVersion` |
 | This computer | `Get-DepotInstalledApp`, `Get-DepotUpdate`, `Install-DepotApp`, `Update-DepotApp`, `Uninstall-DepotApp`, `Save-DepotInstaller` |
 | Server | `Get-DepotServerStatus`, `Get-DepotEvent`, `Invoke-DepotServerCheck`*, `Set-DepotSchedule`* |
-| Adding applications | `Find-DepotWingetPackage`*, `Test-DepotAppSource`*, `New-DepotApp`*, `Publish-DepotInstaller`*, `Remove-DepotApp`*, `Get-DepotManifestTemplate`* — see [adding-applications.md](adding-applications.md) |
+| Adding applications | `Find-DepotWingetPackage`*, `Test-DepotAppSource`*, `New-DepotApp`*, `Publish-DepotInstaller`*, `Remove-DepotApp`*, `Get-DepotManifestTemplate`*, `Add-DepotCatalogApp`* — see [adding-applications.md](adding-applications.md) |
 | Client | `Get-DepotConfig`, `Set-DepotConfig`, `Test-DepotConnection`, `Compare-DepotVersion`, `Show-DepotGui` |
 
 \* needs the server API key (`Set-DepotConfig -ApiKey` or `$env:APPDEPOT_API_KEY`).

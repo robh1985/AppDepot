@@ -23,6 +23,8 @@
     appdepot-server app test (WINGET_ID | --file F | --id APP_ID)   preview, nothing saved
     appdepot-server app template TYPE           print a manifest template
     appdepot-server app remove APP_ID [--delete-files] [--yes]
+    appdepot-server app add-catalog [APP_ID ...] [--overwrite] [--check] [--dry-run] [--from DIR]
+                                                add the applications that ship with AppDepot
 """
 
 from __future__ import annotations
@@ -136,6 +138,13 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("file")
     a.add_argument("--version", dest="version", help="Version (read from MSI files if omitted)")
     a.add_argument("--replace", action="store_true", help="Replace the version if it exists")
+    a = asub.add_parser("add-catalog", help="Add the applications that ship with AppDepot (server/manifests)")
+    a.add_argument("ids", nargs="*", metavar="APP_ID", help="Only these applications (default: all)")
+    a.add_argument("--from", dest="source_dir", help="Take the manifests from this folder instead")
+    a.add_argument("--overwrite", action="store_true",
+                   help="Replace installed manifests that differ (the old file is kept as .bak)")
+    a.add_argument("--check", action="store_true", help="Download the added applications now")
+    a.add_argument("--dry-run", action="store_true", help="Only show what would change")
     a = asub.add_parser("remove", help="Remove an application")
     a.add_argument("app_id")
     a.add_argument("--delete-files", action="store_true")
@@ -367,6 +376,33 @@ def _app_command(ctx, args) -> int:
                                                  source_label="import")
                 print(f"{r.status}: {r.version} {r.message}")
             return 0
+
+        if args.action == "add-catalog":
+            from .onboarding import add_catalog
+            res = add_catalog(ctx.config, ctx.db, source_dir=Path(args.source_dir) if args.source_dir else None,
+                              ids=args.ids or None, overwrite=args.overwrite, dry_run=args.dry_run)
+            labels = {"added": "Added", "updated": "Updated (old file saved as .bak)", "unchanged": "Already up to date",
+                      "kept": "Kept your version (differs; use --overwrite to replace)",
+                      "skipped_removed": "Skipped, removed earlier (name it to add it back)", "errors": "Errors"}
+            for key, label in labels.items():
+                if res[key]:
+                    print(f"{label} ({len(res[key])}):")
+                    for item in res[key]:
+                        print(f"  {item}")
+            if args.dry_run:
+                print("Dry run - nothing was changed.")
+                return 0
+            ctx.scheduler.bump_revision()
+            changed = res["added"] + res["updated"]
+            if args.check and changed:
+                enabled = set(ctx.updater.enabled_app_ids())
+                todo = [i for i in changed if i in enabled]
+                results = ctx.updater.check_many(todo)
+                print(_table([[r.app_id, r.status, r.version or "", r.message[:80]] for r in results],
+                             ["Application", "Status", "Version", "Message"]))
+            elif changed:
+                print("Download them now with: appdepot-server check   (or wait for the schedule)")
+            return 1 if res["errors"] else 0
 
         if args.action == "import":
             r = ctx.updater.import_installer(args.app_id, Path(args.file), version=args.version,

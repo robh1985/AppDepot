@@ -37,7 +37,8 @@ cd AppDepot\server\deploy
 The script
 
 - creates a virtual environment in `C:\AppDepot\venv` and installs the server,
-- copies the example manifests to `C:\AppDepot\manifests`,
+- adds the bundled application catalog (53 applications) to `C:\AppDepot\manifests`
+  (`-SkipCatalog` adds none; `-CheckNow` downloads them straight away),
 - writes `C:\AppDepot\appdepot.yaml` with a random API key (printed once),
 - shares the repository as `\\<server>\AppDepot` — read for *Authenticated Users*
   (this includes computer accounts, so installs running as SYSTEM work), full control for
@@ -46,7 +47,10 @@ The script
 - registers the **AppDepot** service through [NSSM](https://nssm.cc) or, without NSSM, a
   startup scheduled task running as SYSTEM.
 
-Re-run it to upgrade; existing configuration is kept.
+Re-run it to upgrade; existing configuration is kept. A re-run also adds applications that are new
+in the bundled catalog. Manifests you edited or removed are left alone; `-UpdateCatalog` replaces
+edited ones with the bundled version (keeping `*.yaml.bak`). See
+[adding-applications.md](adding-applications.md#the-bundled-catalog).
 
 Then fetch the first versions:
 
@@ -62,7 +66,8 @@ sudo mkdir -p /opt/appdepot /srv/appdepot/repository && sudo chown appdepot: /op
 sudo -u appdepot python3 -m venv /opt/appdepot/venv
 sudo -u appdepot /opt/appdepot/venv/bin/pip install ./server
 sudo -u appdepot cp server/appdepot.example.yaml /opt/appdepot/appdepot.yaml   # edit it
-sudo -u appdepot cp -r server/manifests /opt/appdepot/
+sudo -u appdepot mkdir -p /opt/appdepot/manifests
+sudo -u appdepot /opt/appdepot/venv/bin/appdepot-server -c /opt/appdepot/appdepot.yaml app add-catalog
 sudo cp server/deploy/appdepot.service /etc/systemd/system/
 sudo systemctl enable --now appdepot
 ```
@@ -75,6 +80,7 @@ Share `/srv/appdepot/repository` with Samba (`server/deploy/smb.conf.snippet`) a
 ```bash
 docker build -t appdepot ./server
 docker run -d --name appdepot -p 8080:8080 -v /srv/appdepot:/data appdepot
+docker exec appdepot appdepot-server app add-catalog --check    # add the bundled applications
 ```
 
 `/data` holds `appdepot.yaml`, `manifests/`, the database and the repository.
@@ -212,6 +218,8 @@ appdepot-server [--config FILE] <command>
   app create APP_ID --name NAME [--type T] [--args A] [--installer FILE --version V]   manual application
   app import APP_ID FILE [--version V] [--replace]   add an installer file as a version
   app remove APP_ID [--delete-files]
+  app add-catalog [APP_ID ...] [--overwrite] [--check] [--dry-run] [--from DIR]
+                                                     add the bundled applications (server/manifests)
 ```
 
 See [adding-applications.md](adding-applications.md).

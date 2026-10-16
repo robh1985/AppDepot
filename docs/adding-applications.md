@@ -1,8 +1,9 @@
 # Adding applications
 
-53 applications are already defined in `server/manifests/` (see
-[converted-sync-scripts.md](converted-sync-scripts.md)). Delete the ones you do not need, or set
-`enabled: false`.
+53 applications come with AppDepot in `server/manifests/` (see
+[converted-sync-scripts.md](converted-sync-scripts.md)). Add them to your server with
+`Add-DepotCatalogApp` (see [The bundled catalog](#the-bundled-catalog)); remove the ones you do not
+need with `Remove-DepotApp`, or set `enabled: false`.
 
 There are several ways to add an application, all ending in the same place: a manifest file in the
 server's `manifests` folder and a row in the database. Whichever you use, AppDepot first
@@ -189,6 +190,45 @@ source (the method from the Adobe sync script: Adobe's products service and rele
 Clients update an installed Reader or Acrobat with the patch, and apply the patch straight after a
 new install. Copy and adjust a manifest (`Get-DepotManifestTemplate adobe`) for 32-bit or en_US
 packages. See [manifest-reference.md](manifest-reference.md#adobe--adobe-acrobat-and-acrobat-reader-dc-continuous-track).
+
+## The bundled catalog
+
+The installer adds the bundled applications on a new server, and adds any new ones each time it is
+re-run. To add them to an existing server yourself:
+
+```powershell
+Add-DepotCatalogApp -WhatIf          # what would be added / kept / updated
+Add-DepotCatalogApp -CheckNow        # add them all and download them now
+Add-DepotCatalogApp -Id Google.Chrome, Microsoft.Edge -CheckNow   # only some
+```
+
+```bat
+depot app add-catalog --dry-run
+depot app add-catalog --check
+```
+
+On the server itself (no API key needed):
+
+```bat
+appdepot-server --config C:\AppDepot\appdepot.yaml app add-catalog --check
+```
+
+- Applications already on the server with an identical manifest are left alone.
+- A manifest you have edited (or one from an older AppDepot release, such as the original
+  7-Zip or Notepad++ samples) is **kept**; add `-Overwrite` / `--overwrite` to replace it with the
+  bundled one. The old file is saved next to it as `*.yaml.bak`.
+- Applications you removed with `Remove-DepotApp` are not added back unless you name them with `-Id`.
+
+The applications are in the database straight away (`Get-DepotApp -IncludeEmpty`), but the
+catalog in the GUI and `depot list` only shows an application once a version has been downloaded,
+so run the check (`-CheckNow`, `Invoke-DepotServerCheck`, `depot server check`) or wait for the
+schedule. The first check downloads several GB (Adobe Acrobat alone is about 1 GB). Before it:
+
+- set `sources.github_token` in `appdepot.yaml` (many applications use GitHub or winget, and
+  GitHub allows 60 anonymous requests an hour);
+- `Adobe.CreativeCloud` is a manual application: upload your Admin Console package with
+  `Publish-DepotInstaller`;
+- `Duo.DuoWinLogon` needs your IKEY/SKEY/HOST in `install_args` for new installs.
 
 ## 5. Through the REST API
 

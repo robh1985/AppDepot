@@ -30,6 +30,7 @@ from .manifest import ManifestError, export_manifest
 from .onboarding import (
     TEMPLATES,
     OnboardingError,
+    add_catalog,
     WingetCatalog,
     manifest_from_winget,
     preview,
@@ -158,6 +159,13 @@ class ScheduleBody(BaseModel):
 class CheckBody(BaseModel):
     app_ids: list[str] | None = None
     force: bool = False
+
+
+class CatalogBody(BaseModel):
+    app_ids: list[str] | None = Field(None, description="Only these applications (default: all bundled ones)")
+    overwrite: bool = Field(False, description="Replace installed manifests that differ (old file kept as .bak)")
+    dry_run: bool = False
+    check: bool = Field(False, description="Download the added/updated applications now")
 
 
 def create_app(ctx: AppContext, start_scheduler: bool = True) -> FastAPI:
@@ -320,6 +328,23 @@ def create_app(ctx: AppContext, start_scheduler: bool = True) -> FastAPI:
         if not isinstance(manifest, dict):
             raise HTTPException(422, "The YAML document must be a mapping")
         return await run_in_threadpool(_save, manifest, replace, check)
+
+    @api.post("/api/v1/catalog/bundled", tags=["admin"], dependencies=admin)
+    def add_bundled_catalog(body: CatalogBody):
+        """Add the applications that ship with AppDepot (server/manifests) to this server."""
+        try:
+            res = add_catalog(ctx.config, ctx.db, ids=body.app_ids, overwrite=body.overwrite, dry_run=body.dry_run)
+        except OnboardingError as exc:
+            raise HTTPException(404, str(exc)) from None
+        changed = res["added"] + res["updated"]
+        if changed and not body.dry_run:
+            ctx.scheduler.bump_revision()
+            ctx.scheduler.reload()
+            if body.check:
+                enabled = set(ctx.updater.enabled_app_ids())
+                res["queued"] = [i for i in changed if i in enabled]
+                ctx.scheduler.run_in_background(res["queued"], reason="catalog import")
+        return res
 
     @api.post("/api/v1/apps/preview", tags=["admin"], dependencies=admin)
     def preview_manifest(manifest: dict[str, Any]):

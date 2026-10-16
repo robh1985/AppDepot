@@ -488,6 +488,74 @@ function Remove-DepotApp {
     }
 }
 
+function Add-DepotCatalogApp {
+    <#
+    .SYNOPSIS
+        Adds the applications that ship with AppDepot to the repository. (Administrative)
+
+    .DESCRIPTION
+        The AppDepot server includes a catalog of ready-made application manifests (the converted
+        sync scripts: 7-Zip, Chrome, Edge, Firefox, Adobe Acrobat/Reader, .NET, Visual C++, Java,
+        Python, Zoom and more; see docs/converted-sync-scripts.md). This copies them into the
+        server's manifests folder and loads them into the database.
+
+        New applications are added. Manifests that are already installed and identical are left
+        alone, manifests that differ (edited on the server, or from an older AppDepot release) are
+        kept unless -Overwrite is used, and applications removed with Remove-DepotApp are not added
+        back unless you name them with -Id.
+
+        The applications appear in Get-DepotApp and the GUI catalog once the server has downloaded
+        a version: use -CheckNow, Invoke-DepotServerCheck, or wait for the schedule.
+        Requires the server API key.
+
+    .PARAMETER Id
+        Only these applications (default: the whole catalog).
+
+    .PARAMETER Overwrite
+        Replace installed manifests that differ from the bundled ones. The server keeps each old
+        file as *.yaml.bak.
+
+    .PARAMETER CheckNow
+        Download the added applications now (in the background on the server).
+
+    .EXAMPLE
+        Add-DepotCatalogApp -WhatIf
+        Shows what would be added, kept or updated.
+
+    .EXAMPLE
+        Add-DepotCatalogApp -CheckNow
+
+    .EXAMPLE
+        Add-DepotCatalogApp -Id Google.Chrome, Microsoft.Edge, Mozilla.Firefox -CheckNow
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Position = 0, ValueFromPipeline, ValueFromPipelineByPropertyName)] [string[]] $Id,
+        [switch] $Overwrite,
+        [switch] $CheckNow
+    )
+    begin { $ids = [System.Collections.Generic.List[string]]::new() }
+    process { foreach ($i in $Id) { if ($i) { $ids.Add($i) } } }
+    end {
+        $target = if ($ids.Count) { $ids -join ', ' } else { 'all bundled applications' }
+        $dryRun = -not $PSCmdlet.ShouldProcess($target, 'Add to the repository')
+        $body = @{ overwrite = [bool]$Overwrite; dry_run = $dryRun; check = [bool]$CheckNow }
+        if ($ids.Count) { $body.app_ids = @($ids) }
+        $r = Invoke-DepotApi -Path 'catalog/bundled' -Method POST -Body $body -Admin
+        [pscustomobject]@{
+            PSTypeName     = 'AppDepot.CatalogImport'
+            Added          = @($r.added)
+            Updated        = @($r.updated)
+            Unchanged      = @($r.unchanged)
+            Kept           = @($r.kept)
+            SkippedRemoved = @($r.skipped_removed)
+            Queued         = @($r.queued | Where-Object { $_ })
+            Errors         = @($r.errors)
+            WhatIf         = $dryRun
+        }
+    }
+}
+
 function Get-DepotManifestTemplate {
     <#
     .SYNOPSIS
