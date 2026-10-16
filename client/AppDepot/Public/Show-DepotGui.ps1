@@ -48,7 +48,7 @@ function Show-DepotGui {
         UI        = $ui
         Rows      = @()
         View      = 'Catalog'
-        Jobs      = New-Object System.Collections.Generic.List[object]
+        Jobs      = @()   # plain array: generic List enumeration fails in WPF timer callbacks
         Actions   = 0
         Selected  = $null
         Connected = $false
@@ -57,7 +57,10 @@ function Show-DepotGui {
     # ---------------------------------------------------------------- timer for background jobs
     $timer = New-Object Windows.Threading.DispatcherTimer
     $timer.Interval = [TimeSpan]::FromMilliseconds(150)
-    $timer.Add_Tick({ Receive-GuiJob })
+    $timer.Add_Tick({
+            try { Receive-GuiJob }
+            catch { Write-GuiLog "Internal error while processing background work: $($_.Exception.Message)" }
+        })
     $timer.Start()
 
     # ---------------------------------------------------------------- navigation

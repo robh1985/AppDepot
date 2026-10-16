@@ -37,14 +37,21 @@ function Start-GuiJob {
         }).AddArgument($script:ModuleManifest).AddArgument($Work.ToString()).AddArgument($ArgumentList)
     $job = @{ PS = $ps; Handle = $ps.BeginInvoke(); OnComplete = $OnComplete; Status = $Status; Action = [bool]$Action }
     if ($Action) { $script:Gui.Actions++ }
-    $script:Gui.Jobs.Add($job)
+    $script:Gui.Jobs = @($script:Gui.Jobs) + @($job)
     Update-GuiBusy
 }
 
 function Receive-GuiJob {
-    foreach ($job in @($script:Gui.Jobs)) {
-        if (-not $job.Handle.IsCompleted) { continue }
-        [void]$script:Gui.Jobs.Remove($job)
+    # Split finished and running jobs first; OnComplete handlers may start new jobs.
+    $done = @()
+    $pending = @()
+    foreach ($job in $script:Gui.Jobs) {
+        if ($job.Handle.IsCompleted) { $done += , $job } else { $pending += , $job }
+    }
+    if ($done.Count -eq 0) { return }
+    $script:Gui.Jobs = $pending
+
+    foreach ($job in $done) {
         if ($job.Action) { $script:Gui.Actions-- }
         $output = @()
         $errors = @()
@@ -58,10 +65,13 @@ function Receive-GuiJob {
         $job.PS.Dispose()
         if ($job.OnComplete) {
             try { & $job.OnComplete $output $errors }
-            catch { Write-GuiLog "Internal error: $($_.Exception.Message)" }
+            catch {
+                Write-GuiLog "Internal error: $($_.Exception.Message)"
+                Set-GuiStatus "Error: $($_.Exception.Message) (see Activity)"
+            }
         }
-        Update-GuiBusy
     }
+    Update-GuiBusy
 }
 
 function Update-GuiBusy {
