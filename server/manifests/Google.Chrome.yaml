@@ -1,0 +1,25 @@
+id: Google.Chrome
+name: Google Chrome
+publisher: Google LLC
+description: Fast, secure web browser (enterprise MSI).
+homepage: https://chromeenterprise.google
+license: Proprietary
+category: Browsers
+tags: [browser]
+
+# Browsers update often: check every 6 hours instead of the global schedule.
+schedule: "15 */6 * * *"
+
+source:
+  type: winget
+  package: Google.Chrome
+  architecture: x64
+  installer_type: [wix, msi]
+  scope: machine
+
+installer:
+  # Chrome updates itself in place; no need to remove the old version first.
+  upgrade_behavior: install
+
+detection:
+  display_name: '^Google Chrome$'

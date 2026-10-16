@@ -1,0 +1,17 @@
+id: VideoLAN.VLC
+name: VLC media player
+publisher: VideoLAN
+description: Free and open source cross-platform multimedia player.
+homepage: https://www.videolan.org/vlc/
+license: GPL-2.0
+category: Multimedia
+tags: [video, audio, player]
+
+source:
+  type: winget
+  package: VideoLAN.VLC
+  architecture: x64
+  installer_type: [wix, msi, nullsoft]
+
+detection:
+  display_name: '^VLC media player'

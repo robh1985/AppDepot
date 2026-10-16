@@ -1,0 +1,162 @@
+TOPIC
+    about_AppDepot
+
+SHORT DESCRIPTION
+    Browse, install, update and uninstall applications from an AppDepot
+    repository server on your network.
+
+LONG DESCRIPTION
+    AppDepot is a self-hosted application repository, similar in spirit to
+    winget but hosted on your own server. The server downloads new versions of
+    applications from the internet on a schedule, keeps the last versions of
+    each application, packages them for Microsoft Intune and records
+    everything in a database.
+
+    The AppDepot module is the client. Everything the GUI (Show-DepotGui) and
+    the command-line tool (depot) can do is available as a cmdlet, so it can
+    be scripted, used in task sequences, or run remotely.
+
+GETTING STARTED
+    Point the client at your server once (as administrator):
+
+        Set-DepotConfig -ServerUrl http://appdepot.corp.example.com:8080
+        Test-DepotConnection
+
+    Then:
+
+        Get-DepotApp                        # what is in the repository
+        Find-DepotApp browser               # search
+        Install-DepotApp Google.Chrome      # install the latest version
+        Get-DepotUpdate                     # what can be updated
+        Update-DepotApp -All                # install every update
+        Show-DepotGui                       # graphical client
+
+CMDLETS
+    Catalog
+        Get-DepotApp            List applications (filter by id, name, category)
+        Find-DepotApp           Search ids, names, publishers, descriptions
+        Get-DepotAppVersion     Versions kept in the repository, with file
+                                locations, hashes, commands and Intune package
+
+    This computer
+        Get-DepotInstalledApp   Catalog applications installed here
+        Get-DepotUpdate         Installed applications with a newer version
+        Install-DepotApp        Install (supports -Version, -Force, -WhatIf)
+        Update-DepotApp         Update one, several or -All
+        Uninstall-DepotApp      Silent uninstall
+        Save-DepotInstaller     Copy an installer (and Intune package) locally
+
+    Server
+        Get-DepotServerStatus   Server version, schedules, failed checks
+        Get-DepotEvent          Server event log
+        Invoke-DepotServerCheck Check the internet for new versions now  (*)
+        Set-DepotSchedule       Change global / per-app schedules        (*)
+
+    Client
+        Get-DepotConfig / Set-DepotConfig / Test-DepotConnection
+        Compare-DepotVersion    Version comparison used by client and server
+        Show-DepotGui           Graphical client
+
+    (*) requires the server API key: Set-DepotConfig -ApiKey <key>, or the
+        APPDEPOT_API_KEY environment variable.
+
+    Use Get-Help <cmdlet> -Full for parameters and examples. Application ids
+    tab-complete for every -Id parameter.
+
+PIPELINE
+    Catalog objects bind to -Id (and LatestVersion to -Version) by property
+    name, so cmdlets chain naturally:
+
+        Get-DepotApp -Category Browsers | Install-DepotApp
+        Get-DepotUpdate | Where-Object Id -like 'Mozilla.*' | Update-DepotApp
+        Get-DepotInstalledApp -Id 'Contoso.*' | Uninstall-DepotApp -WhatIf
+
+    Install, Update and Uninstall return AppDepot.Result objects with Id,
+    Version, Action, Status (Success, Failed, Skipped, NotInstalled),
+    ExitCode, RebootRequired and Message.
+
+HOW INSTALLATION WORKS
+    1. The version record is read from the server: file name, SHA-256,
+       silent install command, success exit codes.
+    2. The installer is copied from the repository share (UNC path) or
+       downloaded over HTTP, depending on TransferMethod:
+           Auto  share when reachable, otherwise HTTP (default)
+           Unc   share only
+           Http  HTTP only
+    3. The SHA-256 hash is verified. A mismatch aborts the installation.
+    4. The silent command runs from the cache folder. MSI installs also write
+       a verbose log (<LogPath>\<id>_<version>_<time>.msi.log).
+    5. Exit codes 0, 1707, 3010 and 1641 (plus any per-application codes)
+       mean success; 3010 and 1641 set RebootRequired. 1618 (another
+       installation in progress) is retried.
+    6. The cached installer is deleted unless -KeepInstaller or the
+       KeepInstallers setting is used.
+
+DETECTING INSTALLED APPLICATIONS
+    Programs and Features entries (HKLM 64-bit, HKLM 32-bit and HKCU) are
+    matched against each application's detection rule from the server: MSI
+    product codes first, then a display-name regular expression and an
+    optional publisher expression. Versions are compared with
+    Compare-DepotVersion, which handles formats such as 24.08, 1.0-rc1 and
+    v3.1 consistently with the server.
+
+CONFIGURATION
+    Settings are stored in %ProgramData%\AppDepot\client.json (written by
+    administrators). Environment variables override the file:
+
+        APPDEPOT_SERVER    server URL
+        APPDEPOT_API_KEY   API key for administrative cmdlets
+        APPDEPOT_HOME      alternative data folder (testing)
+
+    Elevated sessions use %ProgramData%\AppDepot\Cache and \Logs. Standard
+    users use %LOCALAPPDATA%\AppDepot instead, so they can never modify files
+    that an elevated or SYSTEM installation will execute.
+
+LOGGING
+    Every action is appended to <LogPath>\AppDepot.log. Use -Verbose on any
+    cmdlet for step-by-step output.
+
+PERMISSIONS
+    Most applications install for all users and need an elevated session.
+    The GUI shows a banner and can restart itself elevated. For unattended
+    updates install the client with -AutoUpdate, which registers a daily
+    scheduled task running as SYSTEM.
+
+EXAMPLES
+    Install a list of applications on a new computer:
+
+        'Google.Chrome', '7zip.7zip', 'Notepad++.Notepad++' | Install-DepotApp
+
+    Update everything and restart if needed:
+
+        $results = Update-DepotApp -All
+        if ($results.RebootRequired -contains $true) { Restart-Computer -Force }
+
+    Install on remote computers:
+
+        Invoke-Command -ComputerName PC01, PC02 { Install-DepotApp VideoLAN.VLC }
+
+    Report update status for many computers:
+
+        Invoke-Command -ComputerName (Get-Content pcs.txt) { Get-DepotUpdate } |
+            Select-Object PSComputerName, Id, InstalledVersion, LatestVersion
+
+    Collect an Intune package and its deployment notes:
+
+        Save-DepotInstaller Mozilla.Firefox -IncludeIntunePackage -Destination C:\Intune\Firefox
+
+    Ask the server to fetch a new Chrome release now:
+
+        Invoke-DepotServerCheck -Id Google.Chrome -Wait
+
+TROUBLESHOOTING
+    Test-DepotConnection            server and share reachability
+    Get-DepotServerStatus           failed server checks
+    Get-DepotEvent -Level error     server errors
+    <LogPath>\AppDepot.log          client log
+    Install-DepotApp <id> -Verbose  detailed installation output
+
+SEE ALSO
+    Show-DepotGui
+    depot help
+    https://<server>:8080/docs   (REST API documentation)

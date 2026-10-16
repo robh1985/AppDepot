@@ -1,0 +1,23 @@
+id: Git.Git
+name: Git
+publisher: The Git Development Community
+description: Distributed version control system (Git for Windows).
+homepage: https://gitforwindows.org
+license: GPL-2.0
+category: Development
+tags: [git, scm]
+
+# Example of a GitHub Releases source
+source:
+  type: github
+  repo: git-for-windows/git
+  asset_pattern: '^Git-[\d.]+-64-bit\.exe$'
+  version_regex: '^v?(\d+\.\d+\.\d+)'
+
+installer:
+  type: inno
+  install_args: '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS'
+  architecture: x64
+
+detection:
+  display_name: '^Git$|^Git version'

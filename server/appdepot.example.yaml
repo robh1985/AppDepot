@@ -1,0 +1,43 @@
+# AppDepot server configuration
+# Copy to appdepot.yaml and adjust. Relative paths are relative to this file.
+
+server:
+  host: 0.0.0.0                 # listen on all interfaces (all VLANs routed to this host)
+  port: 8080
+  public_url: http://appdepot.corp.example.com:8080   # how clients reach the API/HTTP downloads
+  api_key: "replace-with-a-long-random-string"         # required for admin API calls (X-Api-Key)
+
+repository:
+  root: D:\AppDepot\Repository  # local folder holding installers and Intune packages
+  unc_root: \\appdepot\AppDepot # SMB share pointing at 'root' (clients install from here)
+  retain_versions: 3            # versions kept per application (overridable per app)
+
+database:
+  # SQLite (default) or any SQLAlchemy URL:
+  #   postgresql+psycopg://appdepot:secret@db01/appdepot
+  #   mssql+pyodbc://@SQL01/AppDepot?driver=ODBC+Driver+18+for+SQL+Server&trusted_connection=yes
+  url: sqlite:///D:/AppDepot/appdepot.db
+
+schedule:
+  global: "0 3 * * *"           # cron: minute hour day month weekday (03:00 every day)
+  timezone: null                # e.g. Europe/London; null = server local time
+  max_concurrent: 2             # parallel downloads
+  run_on_startup: false
+
+sources:
+  github_token: null            # optional; raises GitHub API limit from 60 to 5000 requests/hour
+  user_agent: AppDepot/1.0
+  proxy: null                   # e.g. http://proxy.corp.example.com:3128
+  timeout: 600
+  verify_tls: true
+
+intune:
+  enabled: true
+  packager: native              # native (built in, any OS) | official (IntuneWinAppUtil.exe)
+  intunewinapputil_path: null   # e.g. C:\Tools\IntuneWinAppUtil.exe
+
+manifests_dir: ./manifests
+
+logging:
+  level: INFO
+  file: D:\AppDepot\Logs\appdepot.log

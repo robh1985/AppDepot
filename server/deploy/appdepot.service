@@ -1,0 +1,21 @@
+# systemd unit for running AppDepot on Linux.
+# Install:  sudo cp appdepot.service /etc/systemd/system/ && sudo systemctl enable --now appdepot
+[Unit]
+Description=AppDepot application repository
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=appdepot
+Group=appdepot
+WorkingDirectory=/opt/appdepot
+ExecStart=/opt/appdepot/venv/bin/appdepot-server --config /opt/appdepot/appdepot.yaml serve
+Restart=on-failure
+RestartSec=10
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/opt/appdepot /srv/appdepot
+
+[Install]
+WantedBy=multi-user.target

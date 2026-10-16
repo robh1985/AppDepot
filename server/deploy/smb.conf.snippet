@@ -1,0 +1,11 @@
+# Samba share for a Linux-hosted repository (add to /etc/samba/smb.conf).
+# Domain-joined Samba (security = ads) lets Windows clients authenticate with their
+# user or computer accounts; read-only for everyone, writable only by the appdepot service.
+[AppDepot]
+   path = /srv/appdepot/repository
+   comment = AppDepot application repository
+   browseable = yes
+   read only = yes
+   guest ok = no
+   valid users = "@domain users", "@domain computers"
+   write list = appdepot

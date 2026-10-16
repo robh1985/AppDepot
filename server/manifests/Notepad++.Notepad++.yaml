@@ -1,0 +1,17 @@
+id: Notepad++.Notepad++
+name: Notepad++
+publisher: Notepad++ Team
+description: Source code editor and Notepad replacement that supports several languages.
+homepage: https://notepad-plus-plus.org
+license: GPL-3.0
+category: Development
+tags: [editor, text]
+
+source:
+  type: winget
+  package: Notepad++.Notepad++
+  architecture: x64
+  installer_type: nullsoft
+
+detection:
+  display_name: '^Notepad\+\+'

@@ -1,0 +1,22 @@
+id: PuTTY.PuTTY
+name: PuTTY
+publisher: Simon Tatham
+description: SSH and Telnet client.
+homepage: https://www.chiark.greenend.org.uk/~sgtatham/putty/
+license: MIT
+category: Networking
+tags: [ssh, terminal]
+
+# Example of a web page (regex) source
+source:
+  type: web
+  url: https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html
+  version_regex: 'latest release \((?P<version>[\d.]+)\)'
+  download_url: https://the.earth.li/~sgtatham/putty/{version}/w64/putty-64bit-{version}-installer.msi
+
+installer:
+  type: msi
+  architecture: x64
+
+detection:
+  display_name: '^PuTTY'

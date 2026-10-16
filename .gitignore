@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+!client/build/
+dist/
+.venv/
+venv/
+# runtime data
+server/appdepot.yaml
+server/repository/
+*.db
+*.db-wal
+*.db-shm
+*.log

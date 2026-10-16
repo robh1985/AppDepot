@@ -1,0 +1,17 @@
+id: 7zip.7zip
+name: 7-Zip
+publisher: Igor Pavlov
+description: Free and open-source file archiver with a high compression ratio.
+homepage: https://www.7-zip.org
+license: LGPL-2.1
+category: Utilities
+tags: [archive, compression, zip]
+
+source:
+  type: winget
+  package: 7zip.7zip
+  architecture: x64
+  installer_type: exe          # 7-Zip publishes NSIS-based EXE installers (silent: /S)
+
+detection:
+  display_name: '^7-Zip'

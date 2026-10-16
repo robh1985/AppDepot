@@ -1,0 +1,18 @@
+id: Microsoft.VisualStudioCode
+name: Visual Studio Code
+publisher: Microsoft Corporation
+description: Lightweight but powerful source code editor.
+homepage: https://code.visualstudio.com
+license: MIT
+category: Development
+tags: [editor, ide]
+
+source:
+  type: winget
+  package: Microsoft.VisualStudioCode
+  architecture: x64
+  installer_type: inno
+  scope: machine
+
+detection:
+  display_name: '^Microsoft Visual Studio Code$'
