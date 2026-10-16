@@ -256,7 +256,7 @@
                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" Foreground="#111827"/>
                     <TextBlock Foreground="#6B7280" FontSize="12" TextTrimming="CharacterEllipsis">
                       <Run Text="{Binding Publisher, Mode=OneWay}"/>
-                      <Run Text="  ·  "/>
+                      <Run Text="  &#183;  "/>
                       <Run Text="{Binding Category, Mode=OneWay}"/>
                     </TextBlock>
                   </StackPanel>

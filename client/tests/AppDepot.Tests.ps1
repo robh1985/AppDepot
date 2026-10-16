@@ -285,3 +285,12 @@ Describe 'Adding applications' {
         Should -Invoke -ModuleName AppDepot Invoke-DepotApi -ParameterFilter { $Method -eq 'DELETE' -and $Query.delete_files -eq $true }
     }
 }
+
+Describe 'File encoding' {
+    It 'keeps client files ASCII-only so Windows PowerShell 5.1 (ANSI default) reads them correctly' {
+        $root = Join-Path $PSScriptRoot '..'
+        $bad = Get-ChildItem $root -Recurse -Include *.ps1, *.psm1, *.psd1, *.xaml, *.ps1xml |
+            Where-Object { [IO.File]::ReadAllBytes($_.FullName) | Where-Object { $_ -gt 127 } | Select-Object -First 1 }
+        $bad.Name | Should -BeNullOrEmpty
+    }
+}

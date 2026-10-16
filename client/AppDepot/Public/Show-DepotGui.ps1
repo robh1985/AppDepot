@@ -39,7 +39,7 @@ function Show-DepotGui {
 
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 
-    $xamlText = Get-Content -LiteralPath (Join-Path $script:ModuleRoot 'GUI\MainWindow.xaml') -Raw
+    $xamlText = Get-Content -LiteralPath (Join-Path $script:ModuleRoot 'GUI\MainWindow.xaml') -Raw -Encoding UTF8   # 5.1 defaults to ANSI
     $window = [Windows.Markup.XamlReader]::Parse($xamlText)
     $ui = @{}
     foreach ($m in [regex]::Matches($xamlText, 'x:Name="([^"]+)"')) { $ui[$m.Groups[1].Value] = $window.FindName($m.Groups[1].Value) }
