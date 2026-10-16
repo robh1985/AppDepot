@@ -56,6 +56,8 @@ def validate_manifest(m: dict[str, Any], origin: str = "<manifest>") -> dict[str
     if not isinstance(sources, list) or not sources:
         errors.append("'source' (or a 'sources' list) is required")
         sources = []
+    if len(sources) > 1 and any((src or {}).get("type") == "manual" for src in sources):
+        errors.append("a 'manual' source cannot be combined with other sources")
     for i, source in enumerate(sources):
         label = "source" if len(sources) == 1 else f"sources[{i}]"
         stype = (source or {}).get("type")
@@ -73,6 +75,13 @@ def validate_manifest(m: dict[str, Any], origin: str = "<manifest>") -> dict[str
         errors.append(f"installer.type must be one of {sorted(INSTALLER_TYPES)}")
     if itype == "exe" and not installer.get("install_args"):
         errors.append("installer.install_args is required for generic 'exe' installers")
+    if installer.get("update_with") and not APP_ID_RE.match(str(installer["update_with"])):
+        errors.append("installer.update_with must be an application id")
+    if installer.get("signer"):
+        try:
+            re.compile(str(installer["signer"]))
+        except re.error as exc:
+            errors.append(f"installer.signer is not a valid regex: {exc}")
     prefs = installer.get("preferred_types")
     if prefs is not None and (not isinstance(prefs, list) or any(p not in INSTALLER_TYPES for p in prefs)):
         errors.append(f"installer.preferred_types must be a list of {sorted(INSTALLER_TYPES)}")
@@ -89,7 +98,7 @@ def validate_manifest(m: dict[str, Any], origin: str = "<manifest>") -> dict[str
         errors.append("retain_versions must be a positive integer")
 
     detection = m.get("detection") or {}
-    for key in ("display_name", "publisher"):
+    for key in ("display_name", "publisher", "key_pattern"):
         if detection.get(key):
             try:
                 re.compile(detection[key])
@@ -143,6 +152,7 @@ def apply_manifest(app: Application, m: dict[str, Any]) -> None:
         app.source_type = "multi"
         app.source_config = {"sources": [dict(x) for x in sources]}
     app.preferred_types = installer.get("preferred_types")
+    app.extra = {k: installer[k] for k in ("setup_file", "signer", "update_with") if installer.get(k)} or None
     app.installer_type = installer.get("type")
     app.install_args = installer.get("install_args")
     app.uninstall_command = installer.get("uninstall_command")
@@ -204,6 +214,7 @@ def export_manifest(app: Application) -> dict[str, Any]:
             "upgrade_behavior": app.upgrade_behavior,
             "success_exit_codes": app.success_exit_codes or None,
             "preferred_types": app.preferred_types or None,
+            **(app.extra or {}),
         }.items() if v
     }
     return {

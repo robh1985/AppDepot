@@ -35,6 +35,9 @@ or a PowerShell module.
   (regex), **JSON APIs** or **fixed "latest" URLs** (version read from the MSI)
 - **Prefers MSI installers**: every source of an app is checked (an app can have several) and an
   MSI is used whenever one exists for the newest version, before falling back to other types
+- **Adobe Acrobat and Reader** built in: update patches (.msp), full installers, signature checks
+- **Manual applications**: upload your own installers (in-house or licensed software) — they get the
+  same commands, Intune packages and version history as downloaded apps
 - Keeps the last **3 versions** per app (configurable globally and per app)
 - **Global schedule** (cron) plus optional **per-application schedules** or manual-only apps
 - Every downloaded installer is packaged as **`.intunewin`** (built-in packager, no Windows
@@ -50,9 +53,9 @@ or a PowerShell module.
   winget, preview, add), activity, settings
 - **CLI**: `depot list | search | show | install | upgrade | uninstall | download | status …`
   with `--json` output and meaningful exit codes
-- **Adding applications**: search winget and add in one click/command — the manifest is generated
+- **Adding applications**: search winget, upload an installer, or write a manifest for any source — the manifest is generated
   (name, publisher, description, category, detection) and previewed (MSI or not) before saving
-- **PowerShell module**: 23 documented cmdlets, pipeline support, `-WhatIf`, tab completion,
+- **PowerShell module**: 24 documented cmdlets, pipeline support, `-WhatIf`, tab completion,
   formatted output, `Get-Help about_AppDepot`
 - Installs from the SMB share or over HTTP, verifies SHA-256, handles reboot codes,
   detects installed versions from Programs and Features, optional daily auto-update task
@@ -135,7 +138,7 @@ detection:
 ## Testing
 
 ```bash
-cd server && pip install -e .[test] && pytest          # 65 tests
+cd server && pip install -e .[test] && pytest          # 75 tests
 ```
 
 ```powershell

@@ -66,6 +66,7 @@ function Find-DepotWingetPackage {
         [pscustomobject]@{
             PSTypeName   = 'AppDepot.WingetPackage'
             Id           = $_.id
+            WingetId     = $_.id
             Name         = $_.name
             Version      = $_.version
             InRepository = [bool]$_.in_repository
@@ -166,6 +167,10 @@ function New-DepotApp {
                       description, licence, homepage, category, detection rule)
           -Path       a manifest YAML file you wrote (see Get-DepotManifestTemplate)
           -Manifest   a hashtable with the same keys as a manifest file
+          -Name       a manual application: you upload its installers (in-house or licensed
+                      software, or anything not available for download). Give -InstallerPath to
+                      upload the first version straight away; later versions are added with
+                      Publish-DepotInstaller.
 
         The server previews the sources first; the result tells you which installer will be used
         and whether an MSI is available (MSI is always preferred). The manifest is then saved in
@@ -188,6 +193,43 @@ function New-DepotApp {
 
     .PARAMETER Architecture
         Architecture for a winget application (default x64).
+
+    .PARAMETER Id
+        Id of a manual application, e.g. Contoso.Timesheets (letters, digits, . _ + -).
+
+    .PARAMETER Name
+        Display name of a manual application.
+
+    .PARAMETER Publisher
+        Publisher of a manual application.
+
+    .PARAMETER Description
+        Description of a manual application.
+
+    .PARAMETER Homepage
+        Information URL of a manual application.
+
+    .PARAMETER InstallerType
+        Installer technology of a manual application's files: msi, inno, nullsoft, burn, exe, msix,
+        appx or msp. MSI, MSP and MSIX files are recognised automatically.
+
+    .PARAMETER InstallArgs
+        Silent install arguments (required for generic 'exe' installers; replaces the defaults).
+
+    .PARAMETER UninstallCommand
+        Silent uninstall command, e.g. '"%ProgramFiles%\Contoso\uninstall.exe" /S'.
+
+    .PARAMETER SetupFile
+        For .zip installers: the file inside the archive to run, e.g. setup.exe.
+
+    .PARAMETER DetectionName
+        Regular expression for the Programs and Features name (default: ^<Name>).
+
+    .PARAMETER InstallerPath
+        Installer file to upload as the first version of a manual application.
+
+    .PARAMETER Version
+        Version of -InstallerPath (read from MSI files when omitted).
 
     .PARAMETER CheckNow
         Download the application right away.
@@ -213,6 +255,16 @@ function New-DepotApp {
         New-DepotApp -Path .\Contoso.App.yaml -CheckNow
 
     .EXAMPLE
+        New-DepotApp -Id Contoso.Timesheets -Name 'Contoso Timesheets' -Publisher Contoso -Category Business `
+            -InstallerPath \\build01\drops\Timesheets-2.4.1.msi
+
+        Creates a manual application and uploads its first version (read from the MSI).
+
+    .EXAMPLE
+        New-DepotApp -Id Vendor.CadSuite -Name 'CAD Suite' -InstallerType exe -InstallArgs '/quiet /norestart' `
+            -InstallerPath .\CadSuite_2025.1.exe -Version 2025.1
+
+    .EXAMPLE
         New-DepotApp -Manifest @{
             id = 'Contoso.Agent'; name = 'Contoso Agent'; publisher = 'Contoso'; category = 'Security'
             source = @{ type = 'url'; url = 'https://contoso.example/agent/latest.msi'; version_from = 'msi' }
@@ -232,10 +284,23 @@ function New-DepotApp {
     [OutputType('AppDepot.SourcePreview')]
     param(
         [Parameter(Mandatory, ParameterSetName = 'Winget', Position = 0, ValueFromPipelineByPropertyName)]
-        [Alias('Id')] [string] $WingetId,
+        [string] $WingetId,
         [Parameter(Mandatory, ParameterSetName = 'Path')] [string] $Path,
         [Parameter(Mandatory, ParameterSetName = 'Manifest')] [hashtable] $Manifest,
-        [Parameter(ParameterSetName = 'Winget')] [string] $Category,
+        [Parameter(Mandatory, ParameterSetName = 'Manual')] [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_.+\-]{1,199}$')] [string] $Id,
+        [Parameter(Mandatory, ParameterSetName = 'Manual')] [string] $Name,
+        [Parameter(ParameterSetName = 'Manual')] [string] $Publisher,
+        [Parameter(ParameterSetName = 'Manual')] [string] $Description,
+        [Parameter(ParameterSetName = 'Manual')] [string] $Homepage,
+        [Parameter(ParameterSetName = 'Manual')] [ValidateSet('msi', 'wix', 'msp', 'inno', 'nullsoft', 'burn', 'exe', 'msix', 'appx')] [string] $InstallerType,
+        [Parameter(ParameterSetName = 'Manual')] [string] $InstallArgs,
+        [Parameter(ParameterSetName = 'Manual')] [string] $UninstallCommand,
+        [Parameter(ParameterSetName = 'Manual')] [string] $SetupFile,
+        [Parameter(ParameterSetName = 'Manual')] [string] $DetectionName,
+        [Parameter(ParameterSetName = 'Manual')] [string] $InstallerPath,
+        [Parameter(ParameterSetName = 'Manual')] [string] $Version,
+        [Parameter(ParameterSetName = 'Winget')]
+        [Parameter(ParameterSetName = 'Manual')] [string] $Category,
         [Parameter(ParameterSetName = 'Winget')] [ValidateSet('x64', 'x86', 'arm64')] [string] $Architecture = 'x64',
         [switch] $CheckNow,
         [switch] $Replace
@@ -244,6 +309,39 @@ function New-DepotApp {
         $saved = $null
         $query = @{ replace = [bool]$Replace; check = [bool]$CheckNow }
         switch ($PSCmdlet.ParameterSetName) {
+            'Manual' {
+                if ($InstallerPath -and -not (Test-Path -LiteralPath $InstallerPath -PathType Leaf)) {
+                    Write-Error "Installer file not found: $InstallerPath"; return
+                }
+                $installer = @{}
+                foreach ($pair in @(@('type', $InstallerType), @('install_args', $InstallArgs), @('uninstall_command', $UninstallCommand), @('setup_file', $SetupFile))) {
+                    if ($pair[1]) { $installer[$pair[0]] = $pair[1] }
+                }
+                $m = @{ id = $Id; name = $Name; source = @{ type = 'manual' } }
+                foreach ($pair in @(@('publisher', $Publisher), @('description', $Description), @('homepage', $Homepage), @('category', $Category))) {
+                    if ($pair[1]) { $m[$pair[0]] = $pair[1] }
+                }
+                if ($installer.Count) { $m.installer = $installer }
+                if ($DetectionName) { $m.detection = @{ display_name = $DetectionName } }
+                if (-not $PSCmdlet.ShouldProcess("$Name [$Id] (manual)", 'Add to repository')) { return }
+                $saved = Invoke-DepotApi -Path 'apps' -Method POST -Body $m -Query @{ replace = [bool]$Replace } -Admin
+                $result = [pscustomobject]@{
+                    PSTypeName = 'AppDepot.SourcePreview'; Id = $saved.id; Name = $Name; LatestVersion = $null
+                    Installer = $InstallerType; MsiAvailable = $false; Source = 'manual'; FileName = $null
+                    Note = 'Manual application: upload versions with Publish-DepotInstaller'; Ok = $true
+                    InRepository = $true; Candidates = @(); Errors = @(); Category = $Category; Manifest = $m
+                    WingetInstallers = @(); ManifestPath = $saved.manifest_path; CheckQueued = $false
+                }
+                if ($InstallerPath) {
+                    $up = Publish-DepotInstaller -Id $saved.id -Path $InstallerPath -Version $Version -Confirm:$false
+                    if ($up) {
+                        $result.LatestVersion = $up.Version
+                        $result.FileName = Split-Path $InstallerPath -Leaf
+                        $result.Note = $up.Message
+                    }
+                }
+                return $result
+            }
             'Winget' {
                 try { $preview = Test-DepotAppSource -WingetId $WingetId -Category $Category -Architecture $Architecture -ErrorAction Stop }
                 catch { Write-Error -Message "Cannot add ${WingetId}: $($_.Exception.Message)" -TargetObject $WingetId; return }
@@ -281,6 +379,76 @@ function New-DepotApp {
             }
         }
         $preview
+    }
+}
+
+function Publish-DepotInstaller {
+    <#
+    .SYNOPSIS
+        Uploads an installer file to the repository as a new version of an application. (Administrative)
+
+    .DESCRIPTION
+        Adds a version you supply yourself - for manual applications (in-house or licensed software
+        that cannot be downloaded), or to add a version the server cannot fetch. The file is
+        uploaded over HTTP and processed exactly like a download: silent install and uninstall
+        commands, Intune package, deployment sheet and detection script, database record and
+        version retention.
+
+        The version is read from MSI files automatically; for other files give -Version.
+        ZIP files are unpacked on the server using the application's setup_file setting.
+        Requires the server API key.
+
+    .PARAMETER Id
+        Application id (create manual applications with New-DepotApp -Id ... -Name ...).
+
+    .PARAMETER Path
+        Installer file (.msi, .exe, .msp, .msix, .zip ...).
+
+    .PARAMETER Version
+        Version of the installer. Required unless the file is an MSI.
+
+    .PARAMETER Replace
+        Replace the version if it is already in the repository.
+
+    .EXAMPLE
+        Publish-DepotInstaller -Id Contoso.Timesheets -Path \\build01\drops\Timesheets-2.5.0.msi
+
+    .EXAMPLE
+        Publish-DepotInstaller -Id Vendor.CadSuite -Path .\CadSuite_2025.2.exe -Version 2025.2
+
+    .EXAMPLE
+        Get-ChildItem \\build01\drops\Timesheets-*.msi | Publish-DepotInstaller -Id Contoso.Timesheets
+
+        Uploads several versions; each version is read from its MSI. The repository keeps the newest ones.
+
+    .OUTPUTS
+        AppDepot.Result
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType('AppDepot.Result')]
+    param(
+        [Parameter(Mandatory, Position = 0)] [string] $Id,
+        [Parameter(Mandatory, Position = 1, ValueFromPipeline, ValueFromPipelineByPropertyName)] [Alias('FullName')] [string] $Path,
+        [string] $Version,
+        [switch] $Replace
+    )
+    process {
+        $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+        $label = "$($item.Name) ({0:N1} MB)" -f ($item.Length / 1MB)
+        if (-not $PSCmdlet.ShouldProcess("$Id <- $label", 'Upload installer')) { return }
+        Write-DepotLog "Uploading $($item.FullName) to $Id"
+        Write-Progress -Activity "Uploading $($item.Name)" -Status "to $Id" -PercentComplete 50
+        try {
+            $r = Invoke-DepotApi -Path ("apps/{0}/versions" -f [uri]::EscapeDataString($Id)) -Method POST -InFile $item.FullName -Admin `
+                -Query @{ filename = $item.Name; version = $Version; replace = [bool]$Replace }
+        }
+        catch {
+            Write-Progress -Activity "Uploading $($item.Name)" -Completed
+            Write-Error -Message "Upload of $($item.Name) to $Id failed: $($_.Exception.Message)" -TargetObject $Path
+            return
+        }
+        Write-Progress -Activity "Uploading $($item.Name)" -Completed
+        New-DepotResult -Id $Id -Name $item.Name -Version $r.version -Action 'Upload' -Status 'Success' -Message $r.message
     }
 }
 
@@ -327,7 +495,8 @@ function Get-DepotManifestTemplate {
 
     .DESCRIPTION
         Templates exist for every source type: winget, github, web (scrape a download page), json
-        (vendor API), url (fixed "latest" link) and multi (several sources; the MSI is preferred).
+        (vendor API), url (fixed "latest" link), multi (several sources; the MSI is preferred),
+        adobe (Acrobat / Reader installers and update patches) and manual (you upload the installers).
         Save the template, edit it, check it with Test-DepotAppSource -Path and add it with
         New-DepotApp -Path. See docs/manifest-reference.md for every option.
 
@@ -339,6 +508,6 @@ function Get-DepotManifestTemplate {
     #>
     [CmdletBinding()]
     [OutputType([string])]
-    param([Parameter(Mandatory, Position = 0)] [ValidateSet('winget', 'github', 'web', 'json', 'url', 'multi')] [string] $Type)
+    param([Parameter(Mandatory, Position = 0)] [ValidateSet('winget', 'github', 'web', 'json', 'url', 'multi', 'adobe', 'manual')] [string] $Type)
     (Invoke-DepotApi -Path "templates/$Type" -Admin).yaml
 }

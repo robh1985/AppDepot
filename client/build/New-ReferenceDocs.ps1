@@ -13,7 +13,7 @@ Import-Module (Resolve-Path -LiteralPath $ModulePath).Path -Force
 $order = 'Get-DepotApp','Find-DepotApp','Get-DepotAppVersion','Get-DepotInstalledApp','Get-DepotUpdate',
          'Install-DepotApp','Update-DepotApp','Uninstall-DepotApp','Save-DepotInstaller',
          'Get-DepotServerStatus','Get-DepotEvent','Invoke-DepotServerCheck','Set-DepotSchedule',
-         'Find-DepotWingetPackage','Test-DepotAppSource','New-DepotApp','Remove-DepotApp','Get-DepotManifestTemplate',
+         'Find-DepotWingetPackage','Test-DepotAppSource','New-DepotApp','Publish-DepotInstaller','Remove-DepotApp','Get-DepotManifestTemplate',
          'Get-DepotConfig','Set-DepotConfig','Test-DepotConnection','Compare-DepotVersion','Show-DepotGui'
 $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine('# PowerShell cmdlet reference')

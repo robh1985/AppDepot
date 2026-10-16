@@ -116,7 +116,12 @@ function Install-DepotApp {
         If the same or a newer version is already installed the application is skipped unless
         -Force is used. Machine-wide installers require an elevated session.
 
-        Every action is logged to <LogPath>\AppDepot.log; MSI installs also write a verbose MSI log.
+        Archive installers (.zip, e.g. Adobe Acrobat) are extracted and their setup file is run.
+        Update patches (.msp) are only applied when the product they update is installed. When an
+        application names an update patch (update_with), the newest patch is applied right after a
+        new install, so the computer ends up on the latest version.
+
+        Every action is logged to <LogPath>\AppDepot.log; MSI and MSP installs also write a verbose log.
 
     .PARAMETER Id
         Application id. Accepts pipeline input from Get-DepotApp / Find-DepotApp.
@@ -132,6 +137,10 @@ function Install-DepotApp {
 
     .PARAMETER RetryCount
         Number of retries when another installation is in progress (exit code 1618). Default 3.
+
+    .PARAMETER NoPatch
+        Do not apply the application's update patch after a new install (see update_with, used
+        for Adobe Acrobat and Reader whose full installers can be older than the newest patch).
 
     .EXAMPLE
         Install-DepotApp 7zip.7zip
@@ -164,7 +173,8 @@ function Install-DepotApp {
         [Parameter(Position = 1, ValueFromPipelineByPropertyName)] [Alias('LatestVersion')] [string] $Version = 'latest',
         [switch] $Force,
         [switch] $KeepInstaller,
-        [ValidateRange(0, 10)] [int] $RetryCount = 3
+        [ValidateRange(0, 10)] [int] $RetryCount = 3,
+        [switch] $NoPatch
     )
     process {
         $config = Read-DepotConfig
@@ -184,6 +194,11 @@ function Install-DepotApp {
         }
 
         $installed = Find-DepotInstalledEntry -Detection $app.detection -Entries @(Get-DepotUninstallEntry)
+        if ($info.installer_type -eq 'msp' -and -not $installed) {
+            $msg = "$($app.name) is an update patch; the product it updates is not installed on this computer."
+            Write-Warning $msg
+            return New-DepotResult -Id $app.id -Name $app.name -Version $info.version -Action 'Install' -Status 'Skipped' -Message $msg
+        }
         if ($installed -and -not $Force -and $installed.DisplayVersion -and
             (Compare-DepotVersion $installed.DisplayVersion $info.version) -ge 0) {
             $msg = "$($app.name) $($installed.DisplayVersion) is already installed (repository: $($info.version)). Use -Force to reinstall."
@@ -209,12 +224,23 @@ function Install-DepotApp {
             return New-DepotResult -Id $app.id -Name $app.name -Version $info.version -Action 'Install' -Status 'Failed' -Message $_.Exception.Message
         }
 
+        # Archives (e.g. Adobe Acrobat's zip): extract, then run the setup file inside
+        $runFile = $file
+        if ($info.setup_path) {
+            $extract = Join-Path $file.DirectoryName 'extracted'
+            if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+            Write-Progress -Activity "Installing $($app.name) $($info.version)" -Status 'Extracting installer' -PercentComplete 35
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [IO.Compression.ZipFile]::ExtractToDirectory($file.FullName, $extract)
+            $runFile = Get-Item -LiteralPath (Join-Path $extract ($info.setup_path -replace '/', [IO.Path]::DirectorySeparatorChar))
+        }
+
         # Resolve the command against the cached file
         $exe = $info.install.executable
         $arguments = [string]$info.install.arguments
-        if ($exe -eq $info.filename) { $exe = $file.FullName }
-        $arguments = $arguments.Replace('"' + $info.filename + '"', '"' + $file.FullName + '"').Replace("'" + $info.filename + "'", "'" + $file.FullName + "'")
-        if ($info.installer_type -in 'msi', 'wix') {
+        if ($exe -eq $runFile.Name) { $exe = $runFile.FullName }
+        $arguments = $arguments.Replace('"' + $runFile.Name + '"', '"' + $runFile.FullName + '"').Replace("'" + $runFile.Name + "'", "'" + $runFile.FullName + "'")
+        if ($info.installer_type -in 'msi', 'wix', 'msp') {
             if (-not (Test-Path -LiteralPath $config.LogPath)) { New-Item -ItemType Directory -Path $config.LogPath -Force | Out-Null }
             $msiLog = Join-Path $config.LogPath ('{0}_{1}_{2:yyyyMMddHHmmss}.msi.log' -f $app.id, $info.version, (Get-Date))
             $arguments += " /l*v `"$msiLog`""
@@ -223,7 +249,7 @@ function Install-DepotApp {
         Write-Progress -Activity "Installing $($app.name) $($info.version)" -Status 'Running installer' -PercentComplete 50
         $attempt = 0
         do {
-            $code = Invoke-DepotProcess -FilePath $exe -Arguments $arguments -WorkingDirectory $file.DirectoryName -TimeoutMinutes $config.InstallTimeoutMinutes
+            $code = Invoke-DepotProcess -FilePath $exe -Arguments $arguments -WorkingDirectory $runFile.DirectoryName -TimeoutMinutes $config.InstallTimeoutMinutes
             if ($code -eq 1618 -and $attempt -lt $RetryCount) {
                 Write-Verbose 'Another installation is in progress; retrying in 30 seconds.'
                 Start-Sleep -Seconds 30
@@ -244,6 +270,20 @@ function Install-DepotApp {
             }
             if ($reboot) { Write-Warning "$($app.name) requires a restart to complete installation." }
             New-DepotResult -Id $app.id -Name $app.name -Version $info.version -Action 'Install' -Status 'Success' -ExitCode $code -RebootRequired $reboot -Message $meaning
+
+            # Bring a fresh install up to date with the newest patch (e.g. Adobe Acrobat/Reader)
+            if ($app.update_with -and -not $NoPatch) {
+                try {
+                    $patch = Invoke-DepotApi -Path ("apps/{0}" -f [uri]::EscapeDataString($app.update_with))
+                    $now = Find-DepotInstalledEntry -Detection $app.detection -Entries @(Get-DepotUninstallEntry)
+                    $applies = $now -and (Find-DepotInstalledEntry -Detection $patch.detection -Entries @($now))
+                    if ($applies -and $patch.latest_version -and (Compare-DepotVersion $patch.latest_version $info.version) -gt 0) {
+                        Write-DepotLog "Applying $($patch.id) $($patch.latest_version) to the new install"
+                        Install-DepotApp -Id $patch.id -KeepInstaller:$KeepInstaller -Confirm:$false
+                    }
+                }
+                catch { Write-Warning "Could not apply the update patch $($app.update_with): $($_.Exception.Message)" }
+            }
         }
         else {
             Write-DepotLog "Install of $($app.id) $($info.version) failed: exit code $code ($meaning)" -Level ERROR
@@ -319,15 +359,16 @@ function Update-DepotApp {
         foreach ($t in $targets) {
             if (-not $PSCmdlet.ShouldProcess("$($t.Name) $($t.InstalledVersion) -> $($t.LatestVersion)", 'Update')) { continue }
             Write-DepotLog "Updating $($t.Id) $($t.InstalledVersion) -> $($t.LatestVersion)"
-            if ($t.UpgradeBehavior -eq 'uninstall_previous') {
+            if ($t.UpgradeBehavior -eq 'uninstall_previous' -and -not $t.UpdateVia) {
                 $removed = Uninstall-DepotApp -Id $t.Id -Confirm:$false
                 if ($removed.Status -ne 'Success') {
                     $removed
                     continue
                 }
             }
-            $result = Install-DepotApp -Id $t.Id -Version $t.LatestVersion -Force -KeepInstaller:$KeepInstaller -Confirm:$false
-            if ($result) { $result.Action = 'Update' }
+            $targetId = if ($t.UpdateVia) { $t.UpdateVia } else { $t.Id }
+            $result = Install-DepotApp -Id $targetId -Version $t.LatestVersion -Force -NoPatch -KeepInstaller:$KeepInstaller -Confirm:$false
+            foreach ($r in @($result)) { if ($r) { $r.Action = 'Update' } }
             $result
         }
     }

@@ -382,6 +382,38 @@ def remove_application(db: Database, repo, app_id: str, delete_files: bool = Fal
 
 
 TEMPLATES: dict[str, str] = {
+    "manual": """id: Contoso.LineOfBusinessApp      # unique id
+name: Contoso Line-of-Business App
+publisher: Contoso
+description: In-house application; installers are uploaded, not downloaded.
+category: Business
+source:
+  type: manual                    # no automatic checks: upload each version
+installer:
+  type: msi                       # msi | inno | nullsoft | burn | exe | msix ...
+  # install_args: '/qn /norestart'                 # required for type exe
+  # uninstall_command: '"%ProgramFiles%\\Contoso\\uninstall.exe" /S'
+  # setup_file: setup.exe          # for .zip uploads: the file to run inside the archive
+detection:
+  display_name: '^Contoso Line-of-Business App'
+""",
+    "adobe": """id: Adobe.Acrobat.Reader.64-bit.Update
+name: Adobe Acrobat Reader (64-bit) - update
+publisher: Adobe
+category: Office
+retain_versions: 2
+source:
+  type: adobe
+  product: reader                 # reader | acrobat
+  package: update                 # update (.msp patch) | installer (full installer)
+  architecture: x64               # x64 | x86
+  language: MUI                   # Reader: MUI | en_US
+installer:
+  signer: Adobe                   # Authenticode signer check (Windows servers)
+detection:
+  display_name: '^Adobe Acrobat'
+  key_pattern: '^\\{AC76BA86-'
+""",
     "winget": """id: Publisher.App                 # unique id (winget ids work well)
 name: App Name
 publisher: Publisher

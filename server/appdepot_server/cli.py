@@ -14,7 +14,9 @@
     appdepot-server validate FILE ...          validate manifest files
     appdepot-server verify-package FILE        verify an .intunewin file
 
-  Adding applications:
+  Adding applications (see docs/adding-applications.md):
+    appdepot-server app create APP_ID --name NAME [--type msi] [--args ...] [--installer FILE --version V]
+    appdepot-server app import APP_ID FILE [--version V] [--replace]      upload an installer
     appdepot-server app search QUERY            search the winget catalog
     appdepot-server app add WINGET_ID [--category C] [--arch x64] [--check] [--yes]
     appdepot-server app add --file MANIFEST.yaml [--check]
@@ -114,7 +116,26 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--file")
     a.add_argument("--id", dest="app_id", help="An application already in the repository")
     a = asub.add_parser("template", help="Print a manifest template")
-    a.add_argument("type", choices=["winget", "github", "web", "json", "url", "multi"])
+    a.add_argument("type", choices=["winget", "github", "web", "json", "url", "multi", "adobe", "manual"])
+    a = asub.add_parser("create", help="Create a manual application (installers are uploaded)")
+    a.add_argument("app_id")
+    a.add_argument("--name", required=True)
+    a.add_argument("--publisher")
+    a.add_argument("--category")
+    a.add_argument("--description")
+    a.add_argument("--homepage")
+    a.add_argument("--type", dest="installer_type", help="msi, inno, nullsoft, burn, exe, msix ...")
+    a.add_argument("--args", dest="install_args", help="Silent install arguments (required for type exe)")
+    a.add_argument("--uninstall", dest="uninstall_command", help="Silent uninstall command")
+    a.add_argument("--setup-file", help="For .zip installers: the file to run inside the archive")
+    a.add_argument("--detect", dest="display_name", help="Regex for the Programs and Features name")
+    a.add_argument("--installer", help="Upload this installer as the first version")
+    a.add_argument("--version", dest="version", help="Version of --installer (read from MSI files if omitted)")
+    a = asub.add_parser("import", help="Add an installer file as a version of an application")
+    a.add_argument("app_id")
+    a.add_argument("file")
+    a.add_argument("--version", dest="version", help="Version (read from MSI files if omitted)")
+    a.add_argument("--replace", action="store_true", help="Replace the version if it exists")
     a = asub.add_parser("remove", help="Remove an application")
     a.add_argument("app_id")
     a.add_argument("--delete-files", action="store_true")
@@ -328,6 +349,31 @@ def _app_command(ctx, args) -> int:
             print(f"Download it now with: appdepot-server check {result['id']}")
             return 0
 
+        if args.action == "create":
+            installer = {k: v for k, v in {"type": args.installer_type, "install_args": args.install_args,
+                                           "uninstall_command": args.uninstall_command,
+                                           "setup_file": args.setup_file}.items() if v}
+            manifest = {k: v for k, v in {
+                "id": args.app_id, "name": args.name, "publisher": args.publisher,
+                "category": args.category, "description": args.description, "homepage": args.homepage,
+                "source": {"type": "manual"}, "installer": installer or None,
+                "detection": {"display_name": args.display_name} if args.display_name else None,
+            }.items() if v}
+            result = save_application(ctx.config, ctx.db, manifest, added_by="appdepot-server app create")
+            ctx.scheduler.bump_revision()
+            print(f"Created {result['id']} -> {result['manifest_path']}")
+            if args.installer:
+                r = ctx.updater.import_installer(result["id"], Path(args.installer), version=args.version,
+                                                 source_label="import")
+                print(f"{r.status}: {r.version} {r.message}")
+            return 0
+
+        if args.action == "import":
+            r = ctx.updater.import_installer(args.app_id, Path(args.file), version=args.version,
+                                             replace=args.replace, source_label="import")
+            print(f"{r.status}: {r.version} {r.message}")
+            return 0
+
         if args.action == "remove":
             if not _confirm(f"Remove {args.app_id}{' and delete its files' if args.delete_files else ''}?",
                             args.yes):
@@ -337,7 +383,7 @@ def _app_command(ctx, args) -> int:
             print(f"Removed {result['id']}" + (f"; manifest retired to {result['manifest_retired_to']}"
                                               if result["manifest_retired_to"] else ""))
             return 0
-    except (OnboardingError, ManifestError, KeyError) as exc:
+    except (OnboardingError, ManifestError, KeyError, ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     return 2

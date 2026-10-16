@@ -52,7 +52,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "installers": {
         # Installer types in order of preference, applied across all sources of an app.
-        "preferred_types": ["msi", "wix", "msix", "appx", "burn", "inno", "nullsoft", "exe"],
+        "preferred_types": ["msi", "wix", "msp", "msix", "appx", "burn", "inno", "nullsoft", "exe"],
     },
     "intune": {
         "enabled": True,

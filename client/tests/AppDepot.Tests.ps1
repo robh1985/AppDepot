@@ -294,3 +294,42 @@ Describe 'File encoding' {
         $bad.Name | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Manual applications' {
+    BeforeAll { $env:APPDEPOT_API_KEY = 'test-key' }
+    AfterAll { Remove-Item Env:\APPDEPOT_API_KEY }
+
+    It 'creates a manual application and uploads its first version' {
+        $file = Join-Path $TestDrive 'Tool-1.2.exe'; Set-Content -LiteralPath $file -Value 'MZ'
+        Mock -ModuleName AppDepot Invoke-DepotApi { [pscustomobject]@{ id = 'Contoso.Tool'; manifest_path = 'm.yaml' } } -ParameterFilter { $Path -eq 'apps' }
+        Mock -ModuleName AppDepot Invoke-DepotApi { [pscustomobject]@{ version = '1.2'; message = 'Stored version 1.2 (inno).' } } -ParameterFilter { $Path -eq 'apps/Contoso.Tool/versions' }
+        $r = New-DepotApp -Id Contoso.Tool -Name 'Contoso Tool' -InstallerType inno -InstallerPath $file -Version 1.2 -Confirm:$false
+        $r.LatestVersion | Should -Be '1.2'
+        Should -Invoke -ModuleName AppDepot Invoke-DepotApi -ParameterFilter {
+            $Path -eq 'apps' -and $Body.source.type -eq 'manual' -and $Body.installer.type -eq 'inno'
+        }
+        Should -Invoke -ModuleName AppDepot Invoke-DepotApi -ParameterFilter {
+            $Path -eq 'apps/Contoso.Tool/versions' -and $InFile -eq (Get-Item $file).FullName -and $Query.version -eq '1.2'
+        }
+    }
+
+    It 'uploads versions from the pipeline' {
+        1..2 | ForEach-Object { Set-Content -LiteralPath (Join-Path $TestDrive "Lob-$_.msi") -Value 'x' }
+        Mock -ModuleName AppDepot Invoke-DepotApi { [pscustomobject]@{ version = '1'; message = 'ok' } }
+        $r = Get-ChildItem $TestDrive -Filter 'Lob-*.msi' | Publish-DepotInstaller -Id Contoso.Lob -Confirm:$false
+        @($r).Count | Should -Be 2
+        Should -Invoke -ModuleName AppDepot Invoke-DepotApi -Times 2
+    }
+}
+
+Describe 'Update patches' {
+    It 'applies a patch only to the product it targets' {
+        InModuleScope AppDepot {
+            $reader = [pscustomobject]@{ DisplayName = 'Adobe Acrobat (64-bit)'; DisplayVersion = '25.001'; KeyName = '{AC76BA86-1033-FF00-7760-BC15014EA700}' }
+            $proPatch = [pscustomobject]@{ display_name = '^Adobe Acrobat'; product_codes = @('{AC76BA86-1033-FFFF-7760-BC15014EA700}'); match_codes_only = $true }
+            $readerPatch = [pscustomobject]@{ display_name = '^Adobe Acrobat'; product_codes = @('{AC76BA86-1033-FF00-7760-BC15014EA700}'); match_codes_only = $true }
+            Find-DepotInstalledEntry -Detection $proPatch -Entries @($reader) | Should -BeNullOrEmpty
+            Find-DepotInstalledEntry -Detection $readerPatch -Entries @($reader) | Should -Not -BeNullOrEmpty
+        }
+    }
+}

@@ -11,6 +11,7 @@ download, packaging step, purge, schedule or manifest change — updates these t
 | `app_id`, `name`, `publisher`, `description`, `homepage`, `license`, `category`, `tags` | Catalog information |
 | `source_type`, `source_config` | Where new versions are found (manifest `source`; `multi` + a list for `sources`) |
 | `preferred_types` | Per-app installer preference (`NULL` = server default, MSI first) |
+| `extra` | Further installer options: `setup_file`, `signer`, `update_with` |
 | `source_state` | Source bookkeeping, e.g. last ETag for `url` sources |
 | `installer_type`, `install_args`, `uninstall_command`, `uninstall_args`, `architecture`, `scope`, `upgrade_behavior`, `success_exit_codes` | Silent install settings from the manifest |
 | `detection` | Display-name / publisher regex and product code for clients |
@@ -26,13 +27,13 @@ download, packaging step, purge, schedule or manifest change — updates these t
 | Column | Purpose |
 |---|---|
 | `application_id`, **`version`**, `status` (`available` / `purged`), `is_latest` | Available versions (purged rows keep history) |
-| `filename`, `relative_path`, `local_path`, **`unc_path`** | **Location** of the installer (server path and domain share path) |
+| `filename`, `setup_path`, `relative_path`, `local_path`, **`unc_path`** | **Location** of the installer (server path and domain share path) |
 | `sha256`, `size_bytes`, `source_url`, `source_type`, `release_notes_url` | Integrity and provenance (which source supplied the file) |
 | `installer_type`, `architecture`, `scope` | Installer technology |
 | `install_executable`, `install_arguments`, **`install_command`** | **Silent install** information |
 | `uninstall_executable`, `uninstall_arguments`, `uninstall_command` | Silent uninstall |
 | `source_silent_args`, `source_custom_args` | Switches published by the source (winget) |
-| `product_code`, `upgrade_code`, `msi_info` | MSI properties |
+| `product_code`, `upgrade_code`, `msi_info` | MSI properties; for patches `msi_info.TargetProductCodes` |
 | `intunewin_relative_path`, `intune_info_relative_path`, `intune_detection_relative_path`, `intune_status`, `intune_error` | Intune artefacts |
 | **`downloaded_at`**, `purged_at` | **Download date** and removal date |
 

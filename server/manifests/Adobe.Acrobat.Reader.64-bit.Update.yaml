@@ -1,0 +1,26 @@
+id: Adobe.Acrobat.Reader.64-bit.Update
+name: Adobe Acrobat Reader (64-bit) - update
+publisher: Adobe
+description: Cumulative update patch (.msp, multi-language) for an installed 64-bit Acrobat Reader.
+homepage: https://www.adobe.com/devnet-docs/acrobatetk/tools/ReleaseNotesDC/index.html
+license: Proprietary (free)
+category: Office
+tags: [pdf, reader, adobe, update]
+retain_versions: 2              # patches are large (0.5-1 GB)
+
+source:
+  type: adobe
+  product: reader
+  package: update
+  architecture: x64
+  language: MUI
+
+installer:
+  type: msp
+  signer: Adobe
+
+detection:
+  display_name: '^Adobe Acrobat'
+  # Adobe product code of the 64-bit Acrobat Reader DC install. Patches also carry
+  # their exact target product codes, which clients check before applying them.
+  key_pattern: '^\{AC76BA86-1033-FF00-7760-BC15014EA700\}$'

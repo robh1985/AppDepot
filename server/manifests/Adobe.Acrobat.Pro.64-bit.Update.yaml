@@ -1,0 +1,25 @@
+id: Adobe.Acrobat.Pro.64-bit.Update
+name: Adobe Acrobat Pro (64-bit) - update
+publisher: Adobe
+description: Cumulative update patch (.msp) for an installed 64-bit Acrobat Pro.
+homepage: https://www.adobe.com/devnet-docs/acrobatetk/tools/ReleaseNotesDC/index.html
+license: Proprietary (subscription)
+category: Office
+tags: [pdf, acrobat, adobe, update]
+retain_versions: 2
+
+source:
+  type: adobe
+  product: acrobat
+  package: update
+  architecture: x64
+
+installer:
+  type: msp
+  signer: Adobe
+
+detection:
+  display_name: '^Adobe Acrobat'
+  # Adobe product code of the 64-bit Acrobat Pro/Standard DC install. Patches also carry
+  # their exact target product codes, which clients check before applying them.
+  key_pattern: '^\{AC76BA86-1033-FFFF-7760-BC15014EA700\}$'

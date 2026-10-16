@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import hmac
 import html
+import shutil
+import tempfile
+from pathlib import Path
 
 import yaml
 from contextlib import asynccontextmanager
@@ -49,6 +52,7 @@ def serialize_version(ctx: AppContext, app: Application, v: AppVersion) -> dict[
         "status": v.status,
         "is_latest": v.is_latest,
         "filename": v.filename,
+        "setup_path": v.setup_path,
         "installer_type": v.installer_type,
         "architecture": v.architecture,
         "scope": v.scope,
@@ -71,6 +75,7 @@ def serialize_version(ctx: AppContext, app: Application, v: AppVersion) -> dict[
         "success_exit_codes": sorted(set([0, 1707, 3010, 1641] + list(app.success_exit_codes or []))),
         "reboot_exit_codes": [3010, 1641],
         "upgrade_behavior": app.upgrade_behavior,
+        "target_product_codes": (v.msi_info or {}).get("TargetProductCodes") or [],
         "intune": {
             "status": v.intune_status,
             "error": v.intune_error,
@@ -85,6 +90,8 @@ def serialize_version(ctx: AppContext, app: Application, v: AppVersion) -> dict[
 def serialize_app(ctx: AppContext, app: Application, detail: bool = False) -> dict[str, Any]:
     available = sort_versions([v for v in app.versions if v.status == "available"], key=lambda v: v.version)
     latest = available[0] if available else None
+    patch_targets = set((latest.msi_info or {}).get("TargetProductCodes") or []) \
+        if latest and latest.installer_type == "msp" else set()
     data: dict[str, Any] = {
         "id": app.app_id,
         "name": app.name,
@@ -103,11 +110,18 @@ def serialize_app(ctx: AppContext, app: Application, detail: bool = False) -> di
         "size_bytes": latest.size_bytes if latest else None,
         "downloaded_at": _iso(latest.downloaded_at) if latest else None,
         "upgrade_behavior": app.upgrade_behavior,
+        "update_with": (app.extra or {}).get("update_with"),
+        "is_patch": (latest.installer_type if latest else app.installer_type) == "msp",
+        "manual": app.is_manual,
         "detection": {
             "display_name": (app.detection or {}).get("display_name"),
             "publisher": (app.detection or {}).get("publisher"),
+            "key_pattern": (app.detection or {}).get("key_pattern"),
             "product_codes": sorted({v.product_code for v in app.versions if v.product_code}
-                                    | set(filter(None, [(app.detection or {}).get("product_code")]))),
+                                    | set(filter(None, [(app.detection or {}).get("product_code")]))
+                                    | patch_targets),
+            # A patch only applies to the products it targets (read from the .msp itself)
+            "match_codes_only": bool(patch_targets),
         },
         "schedule": app.effective_schedule or "global",
         "last_checked_at": _iso(app.last_checked_at),
@@ -117,6 +131,7 @@ def serialize_app(ctx: AppContext, app: Application, detail: bool = False) -> di
     }
     if detail:
         data["source"] = {"type": app.source_type, **(app.source_config or {})}
+        data["setup_file"] = (app.extra or {}).get("setup_file")
         data["next_check"] = ctx.scheduler.next_run(app.app_id)
         data["version_details"] = [serialize_version(ctx, app, v) for v in available]
         data["manifest"] = export_manifest(app)
@@ -407,6 +422,38 @@ def create_app(ctx: AppContext, start_scheduler: bool = True) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
         return {"id": real_id, "schedule": body.schedule or "global", "next_check": ctx.scheduler.next_run(real_id)}
+
+    @api.post("/api/v1/apps/{app_id}/versions", tags=["admin"], dependencies=admin, status_code=201)
+    async def upload_version(app_id: str, request: Request, filename: str = Query(..., min_length=1),
+                             version: str | None = None, replace: bool = False):
+        """Upload an installer file (raw request body) as a new version of an application.
+
+        Used for manual applications, and to add a version the server cannot download itself.
+        The version is read from MSI files when not given. ZIP archives are unpacked using the
+        application's installer.setup_file. The file goes through the same packaging as a download
+        (commands, Intune package, retention).
+        """
+        with ctx.db.session() as s:
+            real_id = get_app_or_404(s, app_id).app_id
+        tmp_dir = Path(tempfile.mkdtemp(dir=ctx.repo.tmp, prefix="upload-"))
+        tmp = tmp_dir / "upload.bin"
+        try:
+            size = 0
+            with open(tmp, "wb") as fh:
+                async for chunk in request.stream():
+                    fh.write(chunk)
+                    size += len(chunk)
+            if size == 0:
+                raise HTTPException(422, "The request body (the installer file) is empty")
+            try:
+                result = await run_in_threadpool(ctx.updater.import_installer, real_id, tmp,
+                                                 Path(filename).name, version, replace, "upload")
+            except ValueError as exc:
+                status = 409 if "already in the repository" in str(exc) else 422
+                raise HTTPException(status, str(exc)) from None
+            return result.to_dict()
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     @api.post("/api/v1/apps/{app_id}/versions/{version}/repackage", tags=["admin"], dependencies=admin)
     def repackage(app_id: str, version: str):

@@ -1,12 +1,14 @@
 """Version sources: where AppDepot looks for new releases on the internet."""
 
+from .adobe import AdobeSource, ManualSource
 from .base import ReleaseInfo, Source, SourceContext, make_client
 from .github import GitHubSource
 from .web import JsonSource, UrlSource, WebSource
 from .winget import WingetSource
 
 SOURCE_TYPES: dict[str, type[Source]] = {
-    cls.type_name: cls for cls in (WingetSource, GitHubSource, WebSource, JsonSource, UrlSource)
+    cls.type_name: cls for cls in (WingetSource, GitHubSource, WebSource, JsonSource, UrlSource,
+                                    AdobeSource, ManualSource)
 }
 
 

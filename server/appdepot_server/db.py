@@ -75,6 +75,8 @@ class Application(Base):
     detection: Mapped[dict | None] = mapped_column(JSON, default=dict)
     success_exit_codes: Mapped[list | None] = mapped_column(JSON, default=list)
     preferred_types: Mapped[list | None] = mapped_column(JSON)   # None = server default
+    # Further installer options: setup_file (archives), signer, update_with
+    extra: Mapped[dict | None] = mapped_column(JSON)
 
     # Scheduling
     schedule: Mapped[str | None] = mapped_column(String(100))  # from manifest; None = global
@@ -98,6 +100,10 @@ class Application(Base):
     versions: Mapped[list["AppVersion"]] = relationship(
         back_populates="application", cascade="all, delete-orphan"
     )
+
+    @property
+    def is_manual(self) -> bool:
+        return all(src.get("type") == "manual" for src in self.source_list)
 
     @property
     def source_list(self) -> list[dict]:
@@ -127,6 +133,7 @@ class AppVersion(Base):
 
     # Installer file
     filename: Mapped[str] = mapped_column(String(300))
+    setup_path: Mapped[str | None] = mapped_column(String(500))  # setup file inside an archive
     relative_path: Mapped[str] = mapped_column(String(500))  # relative to repo root, '/' separated
     local_path: Mapped[str] = mapped_column(String(1000))
     unc_path: Mapped[str | None] = mapped_column(String(1000))

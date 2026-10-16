@@ -9,6 +9,7 @@ function Invoke-DepotApi {
         [ValidateSet('GET', 'POST', 'PUT', 'DELETE')] [string] $Method = 'GET',
         $Body,
         [string] $RawBody,
+        [string] $InFile,
         [string] $ContentType = 'application/json; charset=utf-8',
         [hashtable] $Query,
         [switch] $Admin,
@@ -45,6 +46,11 @@ function Invoke-DepotApi {
     if ($PSBoundParameters.ContainsKey('Body')) {
         $params.Body = ConvertTo-Json -InputObject $Body -Depth 10 -Compress
         $params.ContentType = 'application/json; charset=utf-8'
+    }
+    elseif ($InFile) {
+        $params.InFile = $InFile           # streamed from disk, fine for large installers
+        $params.ContentType = 'application/octet-stream'
+        $params.TimeoutSec = 3600
     }
     elseif ($PSBoundParameters.ContainsKey('RawBody')) {
         $params.Body = [Text.Encoding]::UTF8.GetBytes($RawBody)
@@ -116,6 +122,9 @@ function ConvertTo-DepotApp {
             LastCheckStatus = $App.last_check_status
             Schedule        = $App.schedule
             UpgradeBehavior = $App.upgrade_behavior
+            UpdateWith      = $App.update_with
+            IsPatch         = [bool]$App.is_patch
+            Manual          = [bool]$App.manual
             Detection       = $App.detection
         }
     }
@@ -131,6 +140,7 @@ function ConvertTo-DepotVersion {
             IsLatest         = [bool]$Version.is_latest
             Status           = $Version.status
             FileName         = $Version.filename
+            SetupPath        = $Version.setup_path
             InstallerType    = $Version.installer_type
             Architecture     = $Version.architecture
             Scope            = $Version.scope

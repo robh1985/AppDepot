@@ -41,7 +41,7 @@ Show-DepotGui        # or: depot gui, or the Start menu shortcut
 | **Catalog** | Every application in the repository as a card with publisher, category, version and a status pill (*Available*, *Installed*, *Update available*). Search box filters by name, id, publisher or category. |
 | **Installed** | Repository applications installed on this computer. |
 | **Updates** | Installed applications with a newer version. The sidebar badge shows the count; *Update all* installs them. |
-| **Add apps** | Search winget, preview an application (with an *MSI available* badge), choose its category and add it to the repository — optionally downloading it immediately. Needs the server API key (Settings). |
+| **Add apps** | Three tabs (needs the server API key, under Settings): **From winget** — search, preview (with an *MSI available* badge), choose a category and add; **Upload installer** — create a manual application or add a version by uploading a file; **Manifest** — load a template (manual, adobe, web, json, github, url, multi, winget), edit, **Test** and add. |
 | **Activity** | The server's event log (downloads, updates, purges, errors) and a log of this session's operations. |
 | **Settings** | Server URL, transfer method, cache option, server API key, *Test connection*, *Open log folder*. |
 
@@ -80,7 +80,9 @@ depot app search <query>                Search winget                           
 depot app add <wingetId> [--category C]  Add from winget [--check] [--replace] [--yes]      (API key)
 depot app add --file <manifest.yaml>     Add from a manifest file                           (API key)
 depot app test <wingetId>|--file F|--id ID   Preview: version, installers, MSI or not       (API key)
-depot app template <type>                Manifest template (winget github web json url multi)
+depot app template <type>                Manifest template (winget github web json url multi adobe manual)
+depot app create <id> --name "Name"      Manual application [--type inno] [--installer FILE --version V] (API key)
+depot app upload <id> <file> [--version V]   Upload an installer as a new version               (API key)
 depot app remove <id> [--delete-files]                                                      (API key)
 
 depot config                             Show configuration
@@ -117,7 +119,7 @@ parameters and examples, and `Get-Help about_AppDepot` for the conceptual overvi
 | Catalog | `Get-DepotApp`, `Find-DepotApp`, `Get-DepotAppVersion` |
 | This computer | `Get-DepotInstalledApp`, `Get-DepotUpdate`, `Install-DepotApp`, `Update-DepotApp`, `Uninstall-DepotApp`, `Save-DepotInstaller` |
 | Server | `Get-DepotServerStatus`, `Get-DepotEvent`, `Invoke-DepotServerCheck`*, `Set-DepotSchedule`* |
-| Adding applications | `Find-DepotWingetPackage`*, `Test-DepotAppSource`*, `New-DepotApp`*, `Remove-DepotApp`*, `Get-DepotManifestTemplate`* — see [adding-applications.md](adding-applications.md) |
+| Adding applications | `Find-DepotWingetPackage`*, `Test-DepotAppSource`*, `New-DepotApp`*, `Publish-DepotInstaller`*, `Remove-DepotApp`*, `Get-DepotManifestTemplate`* — see [adding-applications.md](adding-applications.md) |
 | Client | `Get-DepotConfig`, `Set-DepotConfig`, `Test-DepotConnection`, `Compare-DepotVersion`, `Show-DepotGui` |
 
 \* needs the server API key (`Set-DepotConfig -ApiKey` or `$env:APPDEPOT_API_KEY`).

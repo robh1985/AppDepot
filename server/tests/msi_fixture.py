@@ -49,8 +49,36 @@ def _dir_entry(name: str, etype: int, child=NOSTREAM, right=NOSTREAM, start=0, s
 
 def build_msi(props: dict[str, str]) -> bytes:
     pool, data, table = _string_tables(props)
-    streams = [(encode_table_name("_StringPool"), pool), (encode_table_name("_StringData"), data),
-               (encode_table_name("Property"), table)]
+    return build_ole([(encode_table_name("_StringPool"), pool), (encode_table_name("_StringData"), data),
+                      (encode_table_name("Property"), table)])
+
+
+def summary_information(template: str, codepage: int = 1252) -> bytes:
+    """A SummaryInformation property set holding PID_CODEPAGE (1) and PID_TEMPLATE (7)."""
+    fmtid = bytes.fromhex("E0859FF2F94F6810AB9108002B27B3D9")
+    text = template.encode("latin-1") + b"\0"
+    text += b"\0" * (-len(text) % 4)
+    props = [(1, struct.pack("<IhH", 0x02, codepage, 0)),                       # VT_I2
+             (7, struct.pack("<II", 0x1E, len(template) + 1) + text)]           # VT_LPSTR
+    header_len = 8 + 8 * len(props)
+    offsets, body = [], b""
+    for pid, value in props:
+        offsets.append((pid, header_len + len(body)))
+        body += value
+    section = struct.pack("<II", header_len + len(body), len(props)) + \
+        b"".join(struct.pack("<II", pid, off) for pid, off in offsets) + body
+    return struct.pack("<HHI", 0xFFFE, 0, 0x00020006) + b"\0" * 16 + struct.pack("<I", 1) + \
+        fmtid + struct.pack("<I", 48) + section
+
+
+def build_msp(target_product_codes: list[str]) -> bytes:
+    """A minimal .msp: summary information whose Template lists the target ProductCodes."""
+    return build_ole([("\x05SummaryInformation", summary_information(";".join(target_product_codes))),
+                      (encode_table_name("_StringPool"), struct.pack("<HH", 1252, 0)),
+                      (encode_table_name("_StringData"), b"")])
+
+
+def build_ole(streams: list[tuple[str, bytes]]) -> bytes:
 
     # mini stream + mini FAT
     mini = b""

@@ -9,7 +9,9 @@ function Show-DepotGui {
           Catalog    every application in the repository, with details, versions and install button
           Installed  catalog applications installed on this computer
           Updates    installed applications with a newer version available, with "Update all"
-          Add apps   search winget and add applications to the repository (needs the API key)
+          Add apps   add applications (needs the API key): search winget; upload your own installer
+                     files (manual applications, new versions); or write a manifest for any
+                     source (vendor sites, GitHub, JSON APIs, Adobe) and test it before adding
           Activity   the server's event log and the operations performed in this session
           Settings   server URL, transfer method, cache options and API key
 
@@ -95,6 +97,16 @@ function Show-DepotGui {
     $ui.WingetResults.Add_SelectionChanged({ Show-GuiAddPreview $script:Gui.UI.WingetResults.SelectedItem })
     $ui.AddButton.Add_Click({ Invoke-GuiAddApp })
     $ui.AddOpenSettings.Add_Click({ $script:Gui.UI.NavSettings.IsChecked = $true })
+    $ui.AddModeWinget.Add_Checked({ Set-GuiAddMode Winget })
+    $ui.AddModeUpload.Add_Checked({ Set-GuiAddMode Upload })
+    $ui.AddModeManifest.Add_Checked({ Set-GuiAddMode Manifest })
+    $ui.UpNewApp.Add_Checked({ Set-GuiUploadTarget })
+    $ui.UpExistingApp.Add_Checked({ Set-GuiUploadTarget })
+    $ui.UpBrowse.Add_Click({ Select-GuiUploadFile })
+    $ui.UpButton.Add_Click({ Invoke-GuiUpload })
+    $ui.ManLoadTemplate.Add_Click({ Import-GuiTemplate })
+    $ui.ManTest.Add_Click({ Invoke-GuiManifest })
+    $ui.ManAdd.Add_Click({ Invoke-GuiManifest -Add })
     $ui.TestConnectionButton.Add_Click({ Test-GuiConnection })
     $ui.OpenLogButton.Add_Click({
             $path = (Read-DepotConfig).LogPath

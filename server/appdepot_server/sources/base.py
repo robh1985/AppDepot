@@ -36,6 +36,7 @@ class ReleaseInfo:
     source_type: str = ""
     order: int = 0                 # preference order within its source
     downloaded: Any = None         # (path, sha256, size, final_url, cd_filename) once fetched
+    inspected: Any = None          # packages.FileInfo once the file has been examined
 
 
 @dataclass
@@ -117,7 +118,7 @@ def json_path(data: Any, path: str) -> Any:
 
 def type_from_filename(name: str | None) -> str | None:
     ext = (name or "").lower().rsplit(".", 1)[-1] if "." in (name or "") else ""
-    return {"msi": "msi", "msix": "msix", "msixbundle": "msix", "appx": "appx",
+    return {"msi": "msi", "msp": "msp", "msix": "msix", "msixbundle": "msix", "appx": "appx",
             "appxbundle": "appx"}.get(ext)
 
 

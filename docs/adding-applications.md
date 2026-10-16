@@ -1,6 +1,6 @@
 # Adding applications
 
-There are four ways to add an application, all ending in the same place: a manifest file in the
+There are several ways to add an application, all ending in the same place: a manifest file in the
 server's `manifests` folder and a row in the database. Whichever you use, AppDepot first
 **previews** the application, so you see before saving which version will be downloaded,
 which installer will be used and whether an MSI is available.
@@ -10,7 +10,8 @@ which installer will be used and whether an MSI is available.
 | **GUI** — *Add apps* page | Point and click: search, preview, choose a category, add |
 | **PowerShell** — `New-DepotApp` | Scripted onboarding of many applications |
 | **CLI** — `depot app add` / `appdepot-server app add` | Quick additions from a console or on the server itself |
-| **Manifest file** | Applications that are not in winget (vendor sites, GitHub, APIs) |
+| **Manifest file** | Applications that are not in winget (vendor sites, GitHub, APIs, Adobe) |
+| **Upload** (manual application) | Software that cannot be downloaded: in-house, licensed, or anything you have as a file |
 
 Everything except editing files on the server needs the server **API key**
 (GUI: *Settings → Server API key*; PowerShell/CLI: `depot config set ApiKey <key>` or
@@ -113,7 +114,79 @@ detection:
   display_name: '^7-Zip'
 ```
 
-## 3. Through the REST API
+## 3. Manual applications (upload your own installers)
+
+For in-house software, licensed products, or anything the server cannot download, create a
+**manual** application and upload its installer files. Each upload goes through the same
+processing as a download: silent install/uninstall commands, Intune package, deployment sheet,
+detection script, database record and version retention. Manual applications are never checked
+for updates; you upload each new version.
+
+The version is read from MSI files automatically. For other files give the version and the
+installer type, so the correct silent switches are used (`inno`, `nullsoft`, `burn`, or `exe` with
+your own `install_args`).
+
+### GUI
+
+*Add apps* → **Upload installer**:
+
+- **New application**: id, name, publisher, category, installer type, optional silent arguments,
+  uninstall command and detection name; choose the file and click **Create and upload**.
+- **New version of an existing application**: pick the application, choose the file, enter the
+  version (not needed for MSI files) and click **Upload new version**.
+
+### PowerShell
+
+```powershell
+# create + first version (version read from the MSI)
+New-DepotApp -Id Contoso.Timesheets -Name 'Contoso Timesheets' -Publisher Contoso -Category Business `
+    -InstallerPath \\build01\drops\Timesheets-2.4.1.msi
+
+# an EXE needs the version and its installer type (or silent arguments)
+New-DepotApp -Id Vendor.CadSuite -Name 'CAD Suite' -InstallerType inno -InstallerPath .\CadSuite_2025.1.exe -Version 2025.1
+
+# later versions
+Publish-DepotInstaller -Id Vendor.CadSuite -Path .\CadSuite_2025.2.exe -Version 2025.2
+Get-ChildItem \\build01\drops\Timesheets-*.msi | Publish-DepotInstaller -Id Contoso.Timesheets
+```
+
+### Command line
+
+```bat
+depot app create Contoso.Timesheets --name "Contoso Timesheets" --category Business --installer Timesheets-2.4.1.msi
+depot app create Vendor.CadSuite --name "CAD Suite" --type inno
+depot app upload Vendor.CadSuite CadSuite_2025.1.exe --version 2025.1
+```
+
+On the server (files on a local disk or share):
+
+```bat
+appdepot-server app create Vendor.CadSuite --name "CAD Suite" --type inno --installer D:\Drops\CadSuite_2025.1.exe --version 2025.1
+appdepot-server app import Vendor.CadSuite D:\Drops\CadSuite_2025.2.exe --version 2025.2
+```
+
+ZIP files work too: set the setup file (`-SetupFile setup.exe`, `--setup-file setup.exe`) and the
+server extracts it. You can also upload a version for a *non-manual* application, for example one
+the server cannot reach.
+
+## 4. Adobe Acrobat and Reader
+
+Adobe is not served well by winget for enterprise deployment, so AppDepot has a built-in `adobe`
+source (the method from the Adobe sync script: Adobe's products service and release notes,
+`ardownload` patch files, the full Reader and Acrobat installers). Four manifests are included:
+
+| Application | What it is |
+|---|---|
+| `Adobe.Acrobat.Reader.64-bit` | Full Reader installer (MUI) for new installs |
+| `Adobe.Acrobat.Reader.64-bit.Update` | Reader cumulative update patch (.msp) |
+| `Adobe.Acrobat.Pro.64-bit` | Acrobat Pro installer (zip, setup.exe) for new installs |
+| `Adobe.Acrobat.Pro.64-bit.Update` | Acrobat Pro cumulative update patch (.msp) |
+
+Clients update an installed Reader or Acrobat with the patch, and apply the patch straight after a
+new install. Copy and adjust a manifest (`Get-DepotManifestTemplate adobe`) for 32-bit or en_US
+packages. See [manifest-reference.md](manifest-reference.md#adobe--adobe-acrobat-and-acrobat-reader-dc-continuous-track).
+
+## 5. Through the REST API
 
 ```powershell
 $h = @{ 'X-Api-Key' = $key }
@@ -121,6 +194,13 @@ $gen = Invoke-RestMethod "$server/api/v1/winget/packages/Notepad++.Notepad++" -H
 $gen.preview.note
 Invoke-RestMethod "$server/api/v1/apps?check=true" -Method Post -Headers $h `
     -ContentType 'application/json' -Body ($gen.manifest | ConvertTo-Json -Depth 10)
+```
+
+Upload an installer (raw body):
+
+```powershell
+Invoke-RestMethod "$server/api/v1/apps/Vendor.CadSuite/versions?filename=CadSuite_2025.2.exe&version=2025.2" `
+    -Method Post -Headers $h -InFile .\CadSuite_2025.2.exe -ContentType application/octet-stream
 ```
 
 See [api.md](api.md) for all onboarding endpoints.

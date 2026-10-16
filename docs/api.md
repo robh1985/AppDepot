@@ -48,6 +48,8 @@ Read endpoints are open to the network. Endpoints marked **admin** need the `X-A
   "success_exit_codes": [0, 1641, 1707, 3010],
   "reboot_exit_codes": [3010, 1641],
   "source_type": "winget",
+  "setup_path": null,
+  "target_product_codes": [],
   "upgrade_behavior": "install",
   "intune": {
     "status": "ok", "error": null,
@@ -69,12 +71,13 @@ Read endpoints are open to the network. Endpoints marked **admin** need the `X-A
 | `POST /apps/{id}/preview` | Preview an application already in the repository |
 | `GET /winget/search?q=&limit=25` | Search the winget catalog; each result has `in_repository` |
 | `GET /winget/packages/{wingetId}?category=&architecture=x64` | Generate a manifest from winget, with `info` (installer types, `msi_available`) and `preview` |
-| `GET /templates/{type}` | Manifest template: winget, github, web, json, url, multi |
+| `GET /templates/{type}` | Manifest template: winget, github, web, json, url, multi, adobe, manual |
 | `DELETE /apps/{id}?delete_files=false` | Remove an application (optionally its files). The manifest file is renamed to `*.removed` |
 | `POST /apps/{id}/check?force=false&wait=false` | Check now; `wait=true` returns the result |
 | `POST /check` | Body `{"app_ids": [...] or null, "force": false}` — queue checks |
 | `PUT /schedule` | Body `{"schedule": "0 3 * * *"}` — global schedule |
 | `PUT /apps/{id}/schedule` | Body `{"schedule": "0 */6 * * *" \| "manual" \| null}` |
+| `POST /apps/{id}/versions?filename=&version=&replace=false` | Upload an installer (raw request body, streamed) as a new version. The version is read from MSI files when omitted; `409` if it exists unless `replace=true` |
 | `POST /apps/{id}/versions/{version}/repackage` | Rebuild Intune package and commands |
 | `DELETE /apps/{id}/versions/{version}` | Delete a stored version |
 | `POST /manifests/sync` | Reload manifests from disk |

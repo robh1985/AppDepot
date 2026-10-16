@@ -208,7 +208,9 @@ appdepot-server [--config FILE] <command>
   app add WINGET_ID [--category C] [--arch x64] [--check] [--yes]
   app add --file MANIFEST.yaml [--check]
   app test (WINGET_ID | --file F | --id APP_ID)   preview: version, installers, MSI or not
-  app template TYPE              print a manifest template (winget github web json url multi)
+  app template TYPE              print a manifest template (winget github web json url multi adobe manual)
+  app create APP_ID --name NAME [--type T] [--args A] [--installer FILE --version V]   manual application
+  app import APP_ID FILE [--version V] [--replace]   add an installer file as a version
   app remove APP_ID [--delete-files]
 ```
 

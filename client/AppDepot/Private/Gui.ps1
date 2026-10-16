@@ -199,7 +199,8 @@ function Update-GuiData {
         Set-GuiConnection $true ''
         $installedById = @{}
         foreach ($i in $data.Installed) { $installedById[$i.Id] = $i }
-        $script:Gui.Rows = @($data.Apps | ForEach-Object { New-GuiRow $_ $installedById[$_.Id] })
+        # Update patches (e.g. Adobe .msp) are applied through their product, not installed on their own
+        $script:Gui.Rows = @($data.Apps | Where-Object { -not $_.IsPatch } | ForEach-Object { New-GuiRow $_ $installedById[$_.Id] })
         $updates = @($script:Gui.Rows | Where-Object UpdateAvailable).Count
         $ui = $script:Gui.UI
         $ui.UpdateBadgeText.Text = "$updates"
@@ -566,5 +567,180 @@ function Start-GuiRefreshLater {
     Start-GuiJob -Status 'Waiting for the server download...' -Work { Start-Sleep -Seconds 45 } -OnComplete {
         param($output, $errors)
         Update-GuiData
+    }
+}
+
+# ----------------------------------------------------------------------------- Add: modes
+function Set-GuiAddMode {
+    param([ValidateSet('Winget', 'Upload', 'Manifest')] [string] $Mode)
+    $ui = $script:Gui.UI
+    $ui.WingetPanel.Visibility = if ($Mode -eq 'Winget') { 'Visible' } else { 'Collapsed' }
+    $ui.UploadPanel.Visibility = if ($Mode -eq 'Upload') { 'Visible' } else { 'Collapsed' }
+    $ui.ManifestPanel.Visibility = if ($Mode -eq 'Manifest') { 'Visible' } else { 'Collapsed' }
+    if ($Mode -eq 'Upload') { Initialize-GuiUpload }
+    if ($Mode -eq 'Manifest' -and -not $ui.ManTemplate.ItemsSource) {
+        $ui.ManTemplate.ItemsSource = @('manual', 'adobe', 'web', 'json', 'github', 'url', 'multi', 'winget')
+        $ui.ManTemplate.SelectedIndex = 0
+    }
+}
+
+# ----------------------------------------------------------------------------- Add: upload installer
+function Initialize-GuiUpload {
+    $ui = $script:Gui.UI
+    if (-not $ui.UpType.ItemsSource) {
+        $ui.UpType.ItemsSource = @('Automatic', 'msi', 'wix', 'msp', 'inno', 'nullsoft', 'burn', 'exe', 'msix', 'appx')
+        $ui.UpType.SelectedIndex = 0
+    }
+    $ui.UpCategory.ItemsSource = $ui.AddCategory.ItemsSource
+    Set-GuiUploadTarget
+    Start-GuiJob -Status 'Loading applications...' -Work { Get-DepotApp -IncludeEmpty | Sort-Object Id | ForEach-Object { $_.Id } } -OnComplete {
+        param($output, $errors)
+        $script:Gui.UI.UpExistingId.ItemsSource = @($output)
+        Set-GuiStatus 'Ready'
+    }
+}
+
+function Set-GuiUploadTarget {
+    $ui = $script:Gui.UI
+    $existing = [bool]$ui.UpExistingApp.IsChecked
+    $ui.UpExistingFields.Visibility = if ($existing) { 'Visible' } else { 'Collapsed' }
+    $ui.UpNewFields.Visibility = if ($existing) { 'Collapsed' } else { 'Visible' }
+    $ui.UpButton.Content = if ($existing) { 'Upload new version' } else { 'Create and upload' }
+}
+
+function Select-GuiUploadFile {
+    $dlg = New-Object Microsoft.Win32.OpenFileDialog
+    $dlg.Title = 'Choose an installer'
+    $dlg.Filter = 'Installers (*.msi;*.exe;*.msp;*.msix;*.msixbundle;*.appx;*.zip)|*.msi;*.exe;*.msp;*.msix;*.msixbundle;*.appx;*.zip|All files (*.*)|*.*'
+    if ($dlg.ShowDialog($script:Gui.Window)) {
+        $ui = $script:Gui.UI
+        $ui.UpFile.Text = $dlg.FileName
+        $m = [regex]::Match([IO.Path]::GetFileNameWithoutExtension($dlg.FileName), '\d+(\.\d+)+')
+        if ($m.Success -and -not $ui.UpVersion.Text -and $dlg.FileName -notmatch '\.msi$') { $ui.UpVersion.Text = $m.Value }
+    }
+}
+
+function Invoke-GuiUpload {
+    $ui = $script:Gui.UI
+    $file = $ui.UpFile.Text.Trim().Trim('"')
+    $version = $ui.UpVersion.Text.Trim()
+    $ui.UpResult.Foreground = '#B91C1C'
+    if (-not $file -or -not (Test-Path -LiteralPath $file -PathType Leaf)) { $ui.UpResult.Text = 'Choose an installer file.'; return }
+    if (-not $version -and $file -notmatch '\.msi$') { $ui.UpResult.Text = 'Enter the version (it can only be read automatically from MSI files).'; return }
+
+    if ($ui.UpExistingApp.IsChecked) {
+        $id = [string]$ui.UpExistingId.Text
+        if (-not $id) { $ui.UpResult.Text = 'Choose the application.'; return }
+        $work = { param($Id, $File, $Version, $Replace) Publish-DepotInstaller -Id $Id -Path $File -Version $Version -Replace:$Replace -Confirm:$false }
+        $jobArgs = @($id, $file, $version, [bool]$ui.UpReplace.IsChecked)
+    }
+    else {
+        $id = $ui.UpId.Text.Trim()
+        $name = $ui.UpName.Text.Trim()
+        if ($id -notmatch '^[A-Za-z0-9][A-Za-z0-9_.+\-]{1,199}$') { $ui.UpResult.Text = 'Enter an application id such as Contoso.Timesheets (letters, digits, . _ + -).'; return }
+        if (-not $name) { $ui.UpResult.Text = 'Enter the application name.'; return }
+        $type = [string]$ui.UpType.SelectedItem
+        if ($type -eq 'exe' -and -not $ui.UpArgs.Text.Trim()) { $ui.UpResult.Text = "Generic 'exe' installers need silent install arguments."; return }
+        $p = @{ Id = $id; Name = $name; InstallerPath = $file }
+        if ($version) { $p.Version = $version }
+        if ($type -and $type -ne 'Automatic') { $p.InstallerType = $type }
+        foreach ($pair in @(@('Publisher', $ui.UpPublisher.Text), @('Category', $ui.UpCategory.Text), @('Description', $ui.UpDescription.Text),
+                @('InstallArgs', $ui.UpArgs.Text), @('UninstallCommand', $ui.UpUninstall.Text), @('DetectionName', $ui.UpDetect.Text))) {
+            if ([string]$pair[1] -and ([string]$pair[1]).Trim()) { $p[$pair[0]] = ([string]$pair[1]).Trim() }
+        }
+        $work = { param($Params) New-DepotApp @Params -Confirm:$false }
+        $jobArgs = @(, $p)
+    }
+
+    $ui.UpButton.IsEnabled = $false
+    $ui.UpResult.Foreground = '#374151'
+    $ui.UpResult.Text = "Uploading $(Split-Path $file -Leaf) - large installers can take a few minutes..."
+    Write-GuiLog "Uploading $file to $id..."
+    Start-GuiJob -Action -Status "Uploading $(Split-Path $file -Leaf)..." -ArgumentList $jobArgs -Work $work -OnComplete {
+        param($output, $errors)
+        $ui = $script:Gui.UI
+        $r = $output | Select-Object -Last 1
+        if ($errors.Count -or -not $r) {
+            $msg = if ($errors.Count) { $errors -join '; ' } else { 'The server did not accept the file.' }
+            $ui.UpResult.Foreground = '#B91C1C'
+            $ui.UpResult.Text = "Upload failed: $msg"
+            Write-GuiLog "Upload failed: $msg"
+        }
+        else {
+            $ver = if ($r.Version) { $r.Version } else { $r.LatestVersion }
+            $ui.UpResult.Foreground = '#065F46'
+            $ui.UpResult.Text = "Done: $($r.Id) version $ver is in the repository, with its Intune package. It now appears in the Catalog."
+            Write-GuiLog "Uploaded $($r.Id) $ver."
+            $ui.UpFile.Text = ''; $ui.UpVersion.Text = ''
+            Update-GuiData
+            Initialize-GuiUpload
+        }
+        $ui.UpButton.IsEnabled = $true
+    }
+}
+
+# ----------------------------------------------------------------------------- Add: manifest editor
+function Import-GuiTemplate {
+    $type = [string]$script:Gui.UI.ManTemplate.SelectedItem
+    if (-not $type) { return }
+    Start-GuiJob -Status "Loading the $type template..." -ArgumentList @($type) -Work { param($T) Get-DepotManifestTemplate -Type $T } -OnComplete {
+        param($output, $errors)
+        $ui = $script:Gui.UI
+        if ($errors.Count) { $ui.ManResult.Foreground = '#B91C1C'; $ui.ManResult.Text = $errors -join '; ' }
+        else { $ui.ManYaml.Text = ($output -join "`n") }
+        Set-GuiStatus 'Ready'
+    }
+}
+
+function Invoke-GuiManifest {
+    param([switch] $Add)
+    $ui = $script:Gui.UI
+    $yaml = $ui.ManYaml.Text
+    if (-not $yaml.Trim()) { $ui.ManResult.Foreground = '#B91C1C'; $ui.ManResult.Text = 'Load a template or paste a manifest first.'; return }
+    $ui.ManResult.Text = ''
+    $ui.ManBadge.Background = '#F3F4F6'; $ui.ManNote.Foreground = '#374151'
+    $ui.ManNote.Text = if ($Add) { 'Adding...' } else { 'Asking the server to check the sources...' }
+    $ui.ManDetails.Text = ''
+    $work = {
+        param($Yaml, $Add, $CheckNow, $Replace)
+        $f = Join-Path ([IO.Path]::GetTempPath()) ("appdepot-" + [guid]::NewGuid().ToString('N') + '.yaml')
+        [IO.File]::WriteAllText($f, $Yaml, (New-Object Text.UTF8Encoding($false)))
+        try {
+            if ($Add) { New-DepotApp -Path $f -CheckNow:$CheckNow -Replace:$Replace -Confirm:$false }
+            else { Test-DepotAppSource -Path $f }
+        }
+        finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    }
+    $verb = if ($Add) { 'Adding' } else { 'Testing' }
+    Start-GuiJob -Action:$Add -Status "$verb the manifest..." -ArgumentList @($yaml, [bool]$Add, [bool]$ui.ManCheckNow.IsChecked, [bool]$ui.ManReplace.IsChecked) -Work $work -OnComplete {
+        param($output, $errors)
+        $ui = $script:Gui.UI
+        $pv = $output | Select-Object -Last 1
+        Set-GuiStatus 'Ready'
+        if ($errors.Count -or -not $pv) {
+            $ui.ManBadge.Background = '#FEE2E2'; $ui.ManNote.Foreground = '#991B1B'
+            $ui.ManNote.Text = if ($errors.Count) { $errors -join '; ' } else { 'No answer from the server.' }
+            return
+        }
+        if ($pv.Source -eq 'manual' -or ($pv.Note -like 'Manual*')) {
+            $ui.ManBadge.Background = '#E0E7FF'; $ui.ManNote.Foreground = '#3730A3'
+            $ui.ManNote.Text = 'Manual application: upload its installers on the "Upload installer" tab.'
+        }
+        elseif ($pv.MsiAvailable -or $pv.Installer -eq 'msp') { $ui.ManBadge.Background = '#D1FAE5'; $ui.ManNote.Foreground = '#065F46'; $ui.ManNote.Text = $pv.Note }
+        elseif ($pv.Ok) { $ui.ManBadge.Background = '#FEF3C7'; $ui.ManNote.Foreground = '#92400E'; $ui.ManNote.Text = $pv.Note }
+        else { $ui.ManBadge.Background = '#FEE2E2'; $ui.ManNote.Foreground = '#991B1B'; $ui.ManNote.Text = "$($pv.Note). $($pv.Errors -join '; ')" }
+        $lines = @("Id:       $($pv.Id)", "Version:  $($pv.LatestVersion)", "Installer: $($pv.Installer) $(if ($pv.Source) { "from $($pv.Source)" })", '')
+        if (@($pv.Candidates).Count) {
+            $lines += 'Candidates (best first):'
+            $lines += @($pv.Candidates | Select-Object -First 10 | ForEach-Object { "  $($_.Version)  $($_.Type)  $($_.FileName)" })
+        }
+        if (@($pv.Errors).Count) { $lines += ''; $lines += 'Notes:'; $lines += @($pv.Errors | ForEach-Object { "  $_" }) }
+        $ui.ManDetails.Text = $lines -join [Environment]::NewLine
+        if ($pv.PSObject.Properties['ManifestPath'] -and $pv.ManifestPath) {
+            $ui.ManResult.Foreground = '#065F46'
+            $ui.ManResult.Text = "Added $($pv.Id)$(if ($pv.CheckQueued) { '; the server is downloading it now' })."
+            Write-GuiLog "Added $($pv.Id) from a manifest."
+            if ($pv.CheckQueued) { Start-GuiRefreshLater }
+        }
     }
 }

@@ -20,6 +20,10 @@ function Get-DepotApp {
     .PARAMETER Detailed
         Include detailed information (versions, source, next check). Slower: one request per app.
 
+    .PARAMETER IncludeEmpty
+        Also list applications that have no version in the repository yet (for example manual
+        applications before their first upload, or applications whose first check failed).
+
     .EXAMPLE
         Get-DepotApp
 
@@ -50,7 +54,8 @@ function Get-DepotApp {
         [Parameter(Position = 0, ValueFromPipelineByPropertyName)] [SupportsWildcards()] [string] $Id,
         [SupportsWildcards()] [string] $Name,
         [string] $Category,
-        [switch] $Detailed
+        [switch] $Detailed,
+        [switch] $IncludeEmpty
     )
     process {
         if ($Id -and -not [WildcardPattern]::ContainsWildcardCharacters($Id) -and $Detailed) {
@@ -62,7 +67,7 @@ function Get-DepotApp {
             $app | Add-Member -NotePropertyName LastError -NotePropertyValue $raw.last_error
             return $app
         }
-        $apps = Invoke-DepotApi -Path 'apps' -Query @{ category = $Category } | ConvertTo-DepotApp
+        $apps = Invoke-DepotApi -Path 'apps' -Query @{ category = $Category; include_empty = [bool]$IncludeEmpty } | ConvertTo-DepotApp
         if ($Id) { $apps = $apps | Where-Object { $_.Id -like $Id } }
         if ($Name) { $apps = $apps | Where-Object { $_.Name -like $Name } }
         if ($Detailed) {
@@ -168,7 +173,8 @@ function Get-DepotInstalledApp {
         Reads Programs and Features (machine and current-user uninstall registry keys) and matches
         entries to catalog applications using each application's detection rule (MSI product codes
         or a display-name regular expression). Returns installed and latest versions and whether
-        an update is available.
+        an update is available. For applications updated with a patch (update_with, e.g. Adobe
+        Acrobat), the newest patch counts as the latest version and UpdateVia names the patch.
 
     .PARAMETER Id
         Only return this application (wildcards supported).
@@ -194,23 +200,37 @@ function Get-DepotInstalledApp {
         Write-Warning 'Installed-application detection is only available on Windows.'
         return
     }
-    $catalog = Invoke-DepotApi -Path 'apps'
+    $all = @(Invoke-DepotApi -Path 'apps')
+    $byId = @{}
+    foreach ($a in $all) { $byId[$a.id] = $a }
+    # Patch applications (.msp) are applied through the product that names them in update_with
+    $catalog = @($all | Where-Object { -not $_.is_patch })
     if ($Id) { $catalog = $catalog | Where-Object { $_.id -like $Id } }
     $entries = @(Get-DepotUninstallEntry)
     foreach ($app in $catalog) {
         $entry = Find-DepotInstalledEntry -Detection $app.detection -Entries $entries
         if (-not $entry) { continue }
+        $latest = $app.latest_version
+        $via = $null
+        $patch = if ($app.update_with) { $byId[$app.update_with] } else { $null }
+        # Only when the patch targets the installed product (e.g. the Reader patch for Reader)
+        $applies = $patch -and (Find-DepotInstalledEntry -Detection $patch.detection -Entries @($entry))
+        if ($applies -and $patch.latest_version -and (Compare-DepotVersion $patch.latest_version $latest) -gt 0) {
+            $latest = $patch.latest_version
+            $via = $patch.id
+        }
         $update = $false
-        if ($app.latest_version -and $entry.DisplayVersion) {
-            $update = (Compare-DepotVersion $app.latest_version $entry.DisplayVersion) -gt 0
+        if ($latest -and $entry.DisplayVersion) {
+            $update = (Compare-DepotVersion $latest $entry.DisplayVersion) -gt 0
         }
         [pscustomobject]@{
             PSTypeName       = 'AppDepot.InstalledApp'
             Id               = $app.id
             Name             = $app.name
             InstalledVersion = $entry.DisplayVersion
-            LatestVersion    = $app.latest_version
+            LatestVersion    = $latest
             UpdateAvailable  = $update
+            UpdateVia        = $via
             DisplayName      = $entry.DisplayName
             Publisher        = $entry.Publisher
             Scope            = $entry.Scope

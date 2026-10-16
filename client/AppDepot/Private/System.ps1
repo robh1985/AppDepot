@@ -81,6 +81,8 @@ function Find-DepotInstalledEntry {
     $codes = @($Detection.product_codes | Where-Object { $_ })
     $matched = @(foreach ($e in $Entries) {
             if ($codes -contains $e.KeyName) { $e; continue }
+            if ($Detection.match_codes_only) { continue }
+            if ($Detection.key_pattern -and $e.KeyName -notmatch $Detection.key_pattern) { continue }
             if ($Detection.display_name -and $e.DisplayName -match $Detection.display_name) {
                 if ($Detection.publisher -and $e.Publisher -notmatch $Detection.publisher) { continue }
                 $e
@@ -149,6 +151,7 @@ function Get-DepotExitCodeMeaning {
         1619 { 'Installation package could not be opened' }
         1638 { 'Another version of this product is already installed' }
         1641 { 'Success - restart initiated' }
+        1642 { 'The product this patch updates is not installed' }
         1707 { 'Success' }
         3010 { 'Success - restart required' }
         default { "Exit code $ExitCode" }

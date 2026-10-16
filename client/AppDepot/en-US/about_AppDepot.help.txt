@@ -57,6 +57,8 @@ CMDLETS
         Test-DepotAppSource     Preview: newest version, installers, MSI or not
         New-DepotApp            Add from winget (-WingetId), a YAML file (-Path)
                                 or a hashtable (-Manifest); -CheckNow downloads it
+        Publish-DepotInstaller  Upload an installer file as a new version
+                                (manual applications: New-DepotApp -Id .. -Name ..)
         Remove-DepotApp         Remove an application (optionally its files)
         Get-DepotManifestTemplate  Manifest templates for hand-written definitions
 

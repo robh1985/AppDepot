@@ -30,7 +30,7 @@ def deployment_text(*, app: dict, version: dict) -> str:
         "",
         "PACKAGE",
         f"  Package file ....... {version['intunewin_name']}",
-        f"  Setup file ......... {version['filename']}",
+        f"  Setup file ......... {version['filename']}" + (f"  (from {version['archive']})" if version.get("archive") else ""),
         f"  Installer type ..... {INSTALLER_TYPES.get(itype, {}).get('label', itype)}",
         f"  Architecture ....... {version.get('architecture') or 'any'}",
         f"  SHA-256 ............ {version['sha256']}",
@@ -42,7 +42,7 @@ def deployment_text(*, app: dict, version: dict) -> str:
         f"    {version['install_command']}",
         "",
         "  Uninstall command:",
-        f"    {version.get('uninstall_command') or '<not available - specify installer.uninstall_command in the manifest>'}",
+        f"    {version.get('uninstall_command') or _no_uninstall(itype)}",
         "",
         f"  Install behavior ... {behavior}",
         "  Device restart ..... Determine behavior based on return codes",
@@ -50,6 +50,10 @@ def deployment_text(*, app: dict, version: dict) -> str:
         "  Return codes:",
     ]
     lines += [f"    {code:<6} {meaning}" for code, meaning in DEFAULT_RETURN_CODES]
+    if version.get("target_product_codes"):
+        lines += ["", "  This patch applies to these installed products (ProductCode):"]
+        lines += [f"    {code}" for code in version["target_product_codes"]]
+        lines += ["  Add a requirement rule so the patch only targets devices that have the product."]
     lines += ["", "REQUIREMENTS",
               f"  Operating system architecture ... {_arch_requirement(version.get('architecture'))}",
               "  Minimum operating system ........ Windows 10 1809", "",
@@ -81,16 +85,24 @@ def deployment_text(*, app: dict, version: dict) -> str:
     return "\r\n".join(lines)
 
 
+def _no_uninstall(itype: str) -> str:
+    if itype == "msp":
+        return ("cmd.exe /c exit 0    (a patch cannot be removed on its own; uninstall the product "
+                "to remove it - Intune requires a command, this one does nothing)")
+    return "<not available - specify installer.uninstall_command in the manifest>"
+
+
 def _arch_requirement(arch: str | None) -> str:
     return {"x64": "64-bit", "x86": "32-bit and 64-bit", "arm64": "ARM64"}.get(
         (arch or "").lower(), "32-bit and 64-bit")
 
 
 def detection_script(*, app_name: str, version: str, display_name_regex: str,
-                     product_code: str | None = None) -> str:
+                     product_code: str | None = None, key_pattern: str | None = None) -> str:
     """Intune custom detection script: writes output + exit 0 when installed."""
     rx = display_name_regex.replace("'", "''")
     pc = (product_code or "").replace("'", "''")
+    kp = (key_pattern or "").replace("'", "''")
     return f"""<#
     AppDepot detection script
     Application : {app_name}
@@ -101,6 +113,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $RequiredVersion = '{version}'
 $DisplayNamePattern = '{rx}'
 $ProductCode = '{pc}'
+$KeyPattern = '{kp}'
 
 function Get-VersionParts([string]$Version) {{
     @(($Version -replace '^[vV]', '') -split '[^0-9]+' | Where-Object {{ $_ -ne '' }} | ForEach-Object {{ [long]$_ }})
@@ -133,6 +146,7 @@ if ($ProductCode) {{
 
 $entries = foreach ($root in $roots) {{ Get-ChildItem $root | Get-ItemProperty }}
 foreach ($entry in $entries) {{
+    if ($KeyPattern -and $entry.PSChildName -notmatch $KeyPattern) {{ continue }}
     if ($entry.DisplayName -match $DisplayNamePattern -and $entry.DisplayVersion) {{
         if ((Compare-AppVersion $entry.DisplayVersion $RequiredVersion) -ge 0) {{
             Write-Output "Detected $($entry.DisplayName) $($entry.DisplayVersion)"

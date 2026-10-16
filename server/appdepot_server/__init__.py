@@ -1,3 +1,3 @@
 """AppDepot server - a self-hosted application repository with Intune packaging."""
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"

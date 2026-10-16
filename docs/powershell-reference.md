@@ -20,6 +20,7 @@ _Generated from the module's comment-based help. The same text is available with
 | [Find-DepotWingetPackage](#find-depotwingetpackage) | Searches the winget catalog for applications to add to the repository. (Administrative) |
 | [Test-DepotAppSource](#test-depotappsource) | Previews what the server would download for an application, without saving anything. |
 | [New-DepotApp](#new-depotapp) | Adds a new application to the repository. (Administrative) |
+| [Publish-DepotInstaller](#publish-depotinstaller) | Uploads an installer file to the repository as a new version of an application. (Administrative) |
 | [Remove-DepotApp](#remove-depotapp) | Removes an application from the repository. (Administrative) |
 | [Get-DepotManifestTemplate](#get-depotmanifesttemplate) | Returns a manifest template for writing an application definition by hand. |
 | [Get-DepotConfig](#get-depotconfig) | Shows the AppDepot client configuration. |
@@ -33,7 +34,7 @@ _Generated from the module's comment-based help. The same text is available with
 Lists the applications available in the AppDepot repository.
 
 ```powershell
-Get-DepotApp [-Id <String>] [-Name <String>] [-Category <String>] [-Detailed]
+Get-DepotApp [-Id <String>] [-Name <String>] [-Category <String>] [-Detailed] [-IncludeEmpty]
 ```
 
 ### Description
@@ -52,6 +53,7 @@ source definition, next scheduled check and every stored version.
 | `-Name` | String | false | false | Display-name filter. Wildcards are supported. |
 | `-Category` | String | false | false | Only return applications in this category (e.g. Browsers, Utilities). |
 | `-Detailed` | SwitchParameter | false | false | Include detailed information (versions, source, next check). Slower: one request per app. |
+| `-IncludeEmpty` | SwitchParameter | false | false | Also list applications that have no version in the repository yet (for example manual applications before their first upload, or applications whose first check failed). |
 
 ### Examples
 
@@ -170,7 +172,8 @@ Get-DepotInstalledApp [-Id <String>]
 Reads Programs and Features (machine and current-user uninstall registry keys) and matches
 entries to catalog applications using each application's detection rule (MSI product codes
 or a display-name regular expression). Returns installed and latest versions and whether
-an update is available.
+an update is available. For applications updated with a patch (update_with, e.g. Adobe
+Acrobat), the newest patch counts as the latest version and UpdateVia names the patch.
 ```
 
 ### Parameters
@@ -231,7 +234,7 @@ Installs all available updates.
 Installs an application from the AppDepot repository.
 
 ```powershell
-Install-DepotApp -Id <String> [-Version <String>] [-Force] [-KeepInstaller] [-RetryCount <Int32>] [-WhatIf] [-Confirm]
+Install-DepotApp -Id <String> [-Version <String>] [-Force] [-KeepInstaller] [-RetryCount <Int32>] [-NoPatch] [-WhatIf] [-Confirm]
 ```
 
 ### Description
@@ -245,7 +248,12 @@ runs the silent install command stored in the database. Exit codes 0, 1707, 3010
 If the same or a newer version is already installed the application is skipped unless
 -Force is used. Machine-wide installers require an elevated session.
 
-Every action is logged to <LogPath>\AppDepot.log; MSI installs also write a verbose MSI log.
+Archive installers (.zip, e.g. Adobe Acrobat) are extracted and their setup file is run.
+Update patches (.msp) are only applied when the product they update is installed. When an
+application names an update patch (update_with), the newest patch is applied right after a
+new install, so the computer ends up on the latest version.
+
+Every action is logged to <LogPath>\AppDepot.log; MSI and MSP installs also write a verbose log.
 ```
 
 ### Parameters
@@ -257,6 +265,7 @@ Every action is logged to <LogPath>\AppDepot.log; MSI installs also write a verb
 | `-Force` | SwitchParameter | false | false | Install even if the same or a newer version is already installed. |
 | `-KeepInstaller` | SwitchParameter | false | false | Keep the installer in the cache after a successful installation. |
 | `-RetryCount` | Int32 | false | false | Number of retries when another installation is in progress (exit code 1618). Default 3. |
+| `-NoPatch` | SwitchParameter | false | false | Do not apply the application's update patch after a new install (see update_with, used for Adobe Acrobat and Reader whose full installers can be older than the newest patch). |
 
 ### Examples
 
@@ -643,6 +652,7 @@ Adds a new application to the repository. (Administrative)
 New-DepotApp -WingetId <String> [-Category <String>] [-Architecture <String>] [-CheckNow] [-Replace] [-WhatIf] [-Confirm]
 New-DepotApp -Path <String> [-CheckNow] [-Replace] [-WhatIf] [-Confirm]
 New-DepotApp -Manifest <Hashtable> [-CheckNow] [-Replace] [-WhatIf] [-Confirm]
+New-DepotApp -Id <String> -Name <String> [-Publisher <String>] [-Description <String>] [-Homepage <String>] [-InstallerType <String>] [-InstallArgs <String>] [-UninstallCommand <String>] [-SetupFile <String>] [-DetectionName <String>] [-InstallerPath <String>] [-Version <String>] [-Category <String>] [-CheckNow] [-Replace] [-WhatIf] [-Confirm]
 ```
 
 ### Description
@@ -654,6 +664,10 @@ Adds an application in one of three ways:
               description, licence, homepage, category, detection rule)
   -Path       a manifest YAML file you wrote (see Get-DepotManifestTemplate)
   -Manifest   a hashtable with the same keys as a manifest file
+  -Name       a manual application: you upload its installers (in-house or licensed
+              software, or anything not available for download). Give -InstallerPath to
+              upload the first version straight away; later versions are added with
+              Publish-DepotInstaller.
 
 The server previews the sources first; the result tells you which installer will be used
 and whether an MSI is available (MSI is always preferred). The manifest is then saved in
@@ -670,6 +684,18 @@ Use -WhatIf to see the preview without adding anything. Requires the server API 
 | `-WingetId` | String | true | true (ByPropertyName) | winget package id, e.g. Notepad++.Notepad++ (find it with Find-DepotWingetPackage). |
 | `-Path` | String | true | false | Manifest YAML file. |
 | `-Manifest` | Hashtable | true | false | Manifest hashtable. |
+| `-Id` | String | true | false | Id of a manual application, e.g. Contoso.Timesheets (letters, digits, . _ + -). |
+| `-Name` | String | true | false | Display name of a manual application. |
+| `-Publisher` | String | false | false | Publisher of a manual application. |
+| `-Description` | String | false | false | Description of a manual application. |
+| `-Homepage` | String | false | false | Information URL of a manual application. |
+| `-InstallerType` | String | false | false | Installer technology of a manual application's files: msi, inno, nullsoft, burn, exe, msix, appx or msp. MSI, MSP and MSIX files are recognised automatically. |
+| `-InstallArgs` | String | false | false | Silent install arguments (required for generic 'exe' installers; replaces the defaults). |
+| `-UninstallCommand` | String | false | false | Silent uninstall command, e.g. '"%ProgramFiles%\Contoso\uninstall.exe" /S'. |
+| `-SetupFile` | String | false | false | For .zip installers: the file inside the archive to run, e.g. setup.exe. |
+| `-DetectionName` | String | false | false | Regular expression for the Programs and Features name (default: ^<Name>). |
+| `-InstallerPath` | String | false | false | Installer file to upload as the first version of a manual application. |
+| `-Version` | String | false | false | Version of -InstallerPath (read from MSI files when omitted). |
 | `-Category` | String | false | false | Category for a winget application (default: guessed from its description and tags). |
 | `-Architecture` | String | false | false | Architecture for a winget application (default x64). |
 | `-CheckNow` | SwitchParameter | false | false | Download the application right away. |
@@ -699,6 +725,18 @@ New-DepotApp -Path .\Contoso.App.yaml -CheckNow
 ```
 
 ```powershell
+New-DepotApp -Id Contoso.Timesheets -Name 'Contoso Timesheets' -Publisher Contoso -Category Business `
+    -InstallerPath \\build01\drops\Timesheets-2.4.1.msi
+
+Creates a manual application and uploads its first version (read from the MSI).
+```
+
+```powershell
+New-DepotApp -Id Vendor.CadSuite -Name 'CAD Suite' -InstallerType exe -InstallArgs '/quiet /norestart' `
+    -InstallerPath .\CadSuite_2025.1.exe -Version 2025.1
+```
+
+```powershell
 New-DepotApp -Manifest @{
     id = 'Contoso.Agent'; name = 'Contoso Agent'; publisher = 'Contoso'; category = 'Security'
     source = @{ type = 'url'; url = 'https://contoso.example/agent/latest.msi'; version_from = 'msi' }
@@ -706,6 +744,55 @@ New-DepotApp -Manifest @{
 ```
 
 **Output:** `AppDepot.SourcePreview`
+
+## Publish-DepotInstaller
+
+Uploads an installer file to the repository as a new version of an application. (Administrative)
+
+```powershell
+Publish-DepotInstaller -Id <String> -Path <String> [-Version <String>] [-Replace] [-WhatIf] [-Confirm]
+```
+
+### Description
+
+```text
+Adds a version you supply yourself - for manual applications (in-house or licensed software
+that cannot be downloaded), or to add a version the server cannot fetch. The file is
+uploaded over HTTP and processed exactly like a download: silent install and uninstall
+commands, Intune package, deployment sheet and detection script, database record and
+version retention.
+
+The version is read from MSI files automatically; for other files give -Version.
+ZIP files are unpacked on the server using the application's setup_file setting.
+Requires the server API key.
+```
+
+### Parameters
+
+| Parameter | Type | Required | Pipeline | Description |
+|---|---|---|---|---|
+| `-Id` | String | true | false | Application id (create manual applications with New-DepotApp -Id ... -Name ...). |
+| `-Path` | String | true | true (ByValue, ByPropertyName) | Installer file (.msi, .exe, .msp, .msix, .zip ...). |
+| `-Version` | String | false | false | Version of the installer. Required unless the file is an MSI. |
+| `-Replace` | SwitchParameter | false | false | Replace the version if it is already in the repository. |
+
+### Examples
+
+```powershell
+Publish-DepotInstaller -Id Contoso.Timesheets -Path \\build01\drops\Timesheets-2.5.0.msi
+```
+
+```powershell
+Publish-DepotInstaller -Id Vendor.CadSuite -Path .\CadSuite_2025.2.exe -Version 2025.2
+```
+
+```powershell
+Get-ChildItem \\build01\drops\Timesheets-*.msi | Publish-DepotInstaller -Id Contoso.Timesheets
+
+Uploads several versions; each version is read from its MSI. The repository keeps the newest ones.
+```
+
+**Output:** `AppDepot.Result`
 
 ## Remove-DepotApp
 
@@ -753,7 +840,8 @@ Get-DepotManifestTemplate -Type <String>
 
 ```text
 Templates exist for every source type: winget, github, web (scrape a download page), json
-(vendor API), url (fixed "latest" link) and multi (several sources; the MSI is preferred).
+(vendor API), url (fixed "latest" link), multi (several sources; the MSI is preferred),
+adobe (Acrobat / Reader installers and update patches) and manual (you upload the installers).
 Save the template, edit it, check it with Test-DepotAppSource -Path and add it with
 New-DepotApp -Path. See docs/manifest-reference.md for every option.
 ```
@@ -938,7 +1026,9 @@ A WPF application for browsing the repository and managing applications on this 
   Catalog    every application in the repository, with details, versions and install button
   Installed  catalog applications installed on this computer
   Updates    installed applications with a newer version available, with "Update all"
-  Add apps   search winget and add applications to the repository (needs the API key)
+  Add apps   add applications (needs the API key): search winget; upload your own installer
+             files (manual applications, new versions); or write a manifest for any
+             source (vendor sites, GitHub, JSON APIs, Adobe) and test it before adding
   Activity   the server's event log and the operations performed in this session
   Settings   server URL, transfer method, cache options and API key
 

@@ -35,6 +35,9 @@ installer:                          # optional: overrides for silent install
   architecture: x64
   scope: machine                    # machine | user
   upgrade_behavior: install         # install (in place) | uninstall_previous
+  setup_file: setup.exe             # for .zip installers: the file to run inside the archive
+  signer: Adobe                     # require a valid Authenticode signature from this signer (regex)
+  update_with: Vendor.App.Update    # an application holding update patches (.msp) for this one
   success_exit_codes: [0, 3010]     # added to 0, 1707, 3010, 1641
   preferred_types: [msi, wix, inno]  # override the server's installer preference for this app
 
@@ -42,6 +45,7 @@ detection:                          # how clients find the installed version
   display_name: '^Mozilla Firefox'  # regex on Programs and Features DisplayName
   publisher: '^Mozilla'             # optional regex on Publisher
   product_code: '{GUID}'            # optional, MSI product codes are added automatically
+  key_pattern: '^\{AC76BA86-'      # optional regex on the uninstall registry key name
 ```
 
 ## Installer preference (MSI first)
@@ -145,6 +149,47 @@ source:
   an unchanged file is not downloaded again.
 - `filename` / `redirect` take the version from the file name or the final redirected URL.
 
+### `adobe` — Adobe Acrobat and Acrobat Reader (DC, Continuous track)
+
+```yaml
+source:
+  type: adobe
+  product: reader          # reader | acrobat
+  package: update          # update (.msp patch) | installer (full installer)
+  architecture: x64        # x64 | x86
+  language: MUI            # Reader only: MUI (multi-language) | en_US
+```
+
+- **Version**: Adobe's Reader products service (`rdc.adobe.io`), falling back to the Acrobat
+  release notes index on www.adobe.com.
+- **Updates** (`package: update`): the cumulative `.msp` for the release from
+  `ardownload3.adobe.com` / `ardownload2.adobe.com` (`AcroRdrDCx64Upd<v>_MUI.msp`,
+  `AcrobatDCx64Upd<v>.msp`, ...). The products each patch applies to are read from the patch
+  itself; clients only apply a patch to a product it targets.
+- **Full installers** (`package: installer`): Reader's offline installer
+  (`AcroRdrDCx64<v>_MUI.exe`) — when Adobe has not published one for an out-of-cycle release,
+  the previous releases are used — and Acrobat Pro's installer zip from trials.adobe.com
+  (`setup.exe` + `AcroPro.msi`, version read from the MSI).
+
+AppDepot ships four ready-made manifests: `Adobe.Acrobat.Reader.64-bit` and
+`Adobe.Acrobat.Pro.64-bit` (full installers, for new installs) and their `.Update` patch
+applications. The full-installer applications name their patch application in
+`installer.update_with`, so clients update existing installs with the small patch and bring a new
+install up to date by applying the patch right after it. Patches are large (0.5-1 GB): the
+manifests keep 2 versions.
+
+### `manual` — installers you upload
+
+```yaml
+source:
+  type: manual
+```
+
+The server never downloads anything for a manual application. Add versions by uploading files
+(`Publish-DepotInstaller`, `depot app upload`, the GUI's *Upload installer* tab or
+`appdepot-server app import`). See [adding-applications.md](adding-applications.md).
+A manual source cannot be combined with other sources.
+
 ### URL template variables
 
 `{version}`, `{version_nodots}` (24.08 → 2408), `{version_underscore}`, `{version_dashes}`,
@@ -159,6 +204,7 @@ source:
 | `inno` | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /ALLUSERS` | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` |
 | `burn` (WiX bundle) | `/quiet /norestart` | `/uninstall /quiet /norestart` |
 | `msix`, `appx` | `Add-AppxProvisionedPackage` | `Remove-AppxProvisionedPackage` |
+| `msp` (patch) | `msiexec /p "file.msp" /qn /norestart` | — (removed with the product) |
 | `exe` | `install_args` **required** | `uninstall_command` recommended |
 
 When `type` is omitted it is detected from the source (winget), the file extension or the file
@@ -171,6 +217,18 @@ Without an explicit uninstall command, non-MSI installers get a short PowerShell
 finds the application in Programs and Features by `detection.display_name` and runs its
 uninstaller silently — this works in Intune and in the client.
 
+## Archives, signatures and patches
+
+- **ZIP installers**: set `installer.setup_file` (a file name, found anywhere in the archive, or a
+  relative path). The server extracts the archive, reads the version from an MSI next to the setup
+  file when the source has none, and builds the Intune package from the folder that contains the
+  setup file. Clients download the archive, extract it and run the setup file.
+- **Signatures**: `installer.signer: Adobe` rejects files whose Authenticode signature is not valid
+  or not from a matching signer, and tries the next candidate. The check uses Windows' own
+  verification, so it runs on Windows servers; on Linux it is logged as "not verified".
+- **Patches** (`.msp`) are installed only on computers that have the product. Use `update_with`
+  on the product's application to link them.
+
 ## Detection
 
 Clients decide whether an application is installed, and which version, from:
@@ -178,7 +236,9 @@ Clients decide whether an application is installed, and which version, from:
 1. MSI product codes of every stored version (+ `detection.product_code`), matched against
    uninstall registry key names;
 2. `detection.display_name` (regex) and optional `detection.publisher` (regex) against
-   Programs and Features entries. When several match, the highest version wins.
+   Programs and Features entries, optionally limited to registry keys matching
+   `detection.key_pattern` (useful when products share a display name, like Adobe Acrobat and
+   Reader 64-bit). When several match, the highest version wins.
 
 If `display_name` is omitted it defaults to `^<name>`. Make the expression specific enough
 not to match other products (e.g. `^Google Chrome$`, not `Chrome`).

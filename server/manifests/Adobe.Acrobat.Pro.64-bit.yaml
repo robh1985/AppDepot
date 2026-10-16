@@ -1,0 +1,30 @@
+id: Adobe.Acrobat.Pro.64-bit
+name: Adobe Acrobat Pro (64-bit)
+publisher: Adobe
+description: Adobe Acrobat Pro. Full installer for new installs; users sign in with their Adobe ID to license it.
+homepage: https://www.adobe.com/acrobat.html
+license: Proprietary (subscription)
+category: Office
+tags: [pdf, acrobat, adobe]
+retain_versions: 2
+
+# Adobe's installer zip (setup.exe + AcroPro.msi) from trials.adobe.com. It contains an older
+# base version; clients apply the newest update patch right after installing (update_with).
+source:
+  type: adobe
+  product: acrobat
+  package: installer
+  architecture: x64
+
+installer:
+  type: exe
+  setup_file: setup.exe
+  install_args: '/sAll /rs /rps /msi EULA_ACCEPT=YES'
+  signer: Adobe
+  update_with: Adobe.Acrobat.Pro.64-bit.Update
+
+detection:
+  display_name: '^Adobe Acrobat'
+  # Adobe product code of the 64-bit Acrobat Pro/Standard DC install. Patches also carry
+  # their exact target product codes, which clients check before applying them.
+  key_pattern: '^\{AC76BA86-1033-FFFF-7760-BC15014EA700\}$'

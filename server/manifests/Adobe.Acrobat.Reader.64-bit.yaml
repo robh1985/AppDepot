@@ -1,0 +1,35 @@
+id: Adobe.Acrobat.Reader.64-bit
+name: Adobe Acrobat Reader (64-bit)
+publisher: Adobe
+description: Free PDF viewer. Full offline installer (multi-language) for new installs.
+homepage: https://www.adobe.com/acrobat/pdf-reader.html
+license: Proprietary (free)
+category: Office
+tags: [pdf, reader, adobe]
+retain_versions: 2
+
+# Adobe's full Reader installer for the newest release. Adobe does not publish one for some
+# out-of-cycle releases; the previous releases are then tried, and winget is a second source.
+# Clients install the newest update patch right after a new install (update_with).
+sources:
+  - type: adobe
+    product: reader
+    package: installer
+    architecture: x64
+    language: MUI
+  - type: winget
+    package: Adobe.Acrobat.Reader.64-bit
+    architecture: x64
+
+installer:
+  type: exe
+  install_args: '/sAll /rs /msi EULA_ACCEPT=YES'
+  signer: Adobe
+  update_with: Adobe.Acrobat.Reader.64-bit.Update
+
+detection:
+  # 64-bit Reader registers as "Adobe Acrobat (64-bit)", like Acrobat Pro; the product code tells them apart
+  display_name: '^Adobe Acrobat'
+  # Adobe product code of the 64-bit Acrobat Reader DC install. Patches also carry
+  # their exact target product codes, which clients check before applying them.
+  key_pattern: '^\{AC76BA86-1033-FF00-7760-BC15014EA700\}$'

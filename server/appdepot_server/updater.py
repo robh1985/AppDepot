@@ -8,6 +8,7 @@ import re
 import shutil
 import tempfile
 import threading
+import zipfile
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -18,17 +19,18 @@ from sqlalchemy import select
 
 from .config import Config
 from .db import Application, AppVersion, Database, utcnow
-from .installers import MSI_TYPES, build_commands, guess_installer_type
+from .installers import MSI_TYPES, build_commands
 from .intune_info import deployment_text, detection_script
 from .intunewin import create_intunewin_native, create_intunewin_official
-from .msi import msi_summary
+from .packages import FileInfo, inspect_file, safe_extract, verify_signature
 from .repository import Repository, safe_segment
 from .selection import apply_declared_type, candidate_type, describe, gather, rank, selection_note, type_rank
 from .sources import ReleaseInfo, make_client
-from .sources.base import type_from_filename
 from .versioning import sort_versions, version_key
 
 log = logging.getLogger("appdepot.updater")
+
+DOWNLOAD_ERRORS = (httpx.HTTPError, ValueError, OSError, zipfile.BadZipFile)
 
 
 @dataclass
@@ -128,8 +130,8 @@ class Updater:
     def enabled_app_ids(self, only_global_schedule: bool = False) -> list[str]:
         with self.db.session() as s:
             apps = s.scalars(select(Application).where(Application.enabled.is_(True))).all()
-            return sorted(a.app_id for a in apps
-                          if not only_global_schedule or a.effective_schedule is None)
+            return sorted(a.app_id for a in apps if not a.is_manual
+                          and (not only_global_schedule or a.effective_schedule is None))
 
     def repackage(self, app_id: str, version: str) -> dict[str, Any]:
         with self.db.session() as s:
@@ -143,7 +145,9 @@ class Updater:
                 raise KeyError(f"{app_id} {version}")
             self._finalize(app, row)
             result = {"intune_status": row.intune_status, "intune_error": row.intune_error}
-        self.db.log_event("package", "Repackaged for Intune", app_id=app_id, version=version, details=result)
+        self.db.log_event("package", "Repackaged for Intune" if result["intune_status"] != "failed"
+                          else f"Intune packaging failed: {result['intune_error']}", app_id=app_id,
+                          version=version, details=result, level="error" if result["intune_status"] == "failed" else "info")
         return result
 
     def apply_retention(self, app_id: str) -> list[str]:
@@ -197,10 +201,14 @@ class Updater:
             app = self.db.get_app(s, app_id)
             if app is None:
                 raise KeyError(f"Unknown application '{app_id}'")
+            if app.is_manual:
+                return CheckResult(app_id, "skipped", app.latest_version,
+                                   "Manual application: new versions are uploaded, not downloaded")
             sources = app.source_list
             source_state = dict(app.source_state or {})
             existing = {v.version: v.installer_type for v in app.versions if v.status == "available"}
             manifest_type = app.installer_type
+            extra = dict(app.extra or {})
             preferred = list(app.preferred_types or self.config.preferred_types)
 
         self.db.log_event("check", f"Checking {len(sources)} source(s) for updates", app_id=app_id)
@@ -215,18 +223,25 @@ class Updater:
             if not candidates:
                 raise LookupError("No source returned an installer: " + "; ".join(errors))
 
-            # Sources that only reveal the version inside the file (url + version_from: msi)
-            for c in candidates:
+            # Sources that only reveal the version inside the file (an MSI, or an MSI inside a zip)
+            for c in list(candidates):
                 if c.version is None:
-                    c.downloaded = self._download(client, app_id, c, temp_dirs)
-                    c.version = (self._msi_info(c.downloaded[0]) or {}).get("ProductVersion")
+                    try:
+                        c.downloaded = self._download(client, app_id, c, temp_dirs)
+                        c.inspected = self._inspect(c, extra, manifest_type)
+                    except DOWNLOAD_ERRORS as exc:
+                        errors.append(f"{c.url}: {exc}")
+                        candidates.remove(c)
+                        continue
+                    c.version = c.inspected.msi_version
                     c.state = {**c.state, "version": c.version}
             new_state = {str(c.source_index): c.state for c in candidates if c.state}
             apply_declared_type(candidates, manifest_type)
 
             ranked = rank(candidates, preferred)
             if not ranked:
-                raise ValueError("No source provided a version and none could be read from the files")
+                raise ValueError("No source provided a version and none could be read from the files"
+                                 + (": " + "; ".join(errors) if errors else ""))
             best = ranked[0]
             considered = [describe(c) for c in ranked[:12]]
 
@@ -250,41 +265,31 @@ class Updater:
                     if c.downloaded is None:
                         self.db.log_event("download", f"Downloading {c.url}", app_id=app_id, version=c.version)
                         c.downloaded = self._download(client, app_id, c, temp_dirs)
+                    if c.inspected is None:
+                        c.inspected = self._inspect(c, extra, manifest_type)
+                    self._check_signature(app_id, c, extra)
                     chosen = c
                     break
-                except (httpx.HTTPError, ValueError, OSError) as exc:
-                    failures.append(f"{candidate_type(c)} from {c.source_type}: {exc}")
+                except DOWNLOAD_ERRORS as exc:
+                    failures.append(f"{candidate_type(c)} {c.version} from {c.source_type}: {exc}")
                     self.db.log_event("download", f"Download failed, trying next candidate: {exc}",
                                       app_id=app_id, version=c.version, level="error")
             if chosen is None:
-                if failures:
+                if failures and not any(c.version in existing for c in ranked):
                     raise LookupError("All downloads failed: " + "; ".join(failures))
+                # Newer files are not (yet) downloadable; what we already have is current
                 self._set_status(app_id, "up_to_date", state=new_state)
-                return CheckResult(app_id, "up_to_date", best.version, "Already in repository")
+                return CheckResult(app_id, "up_to_date", best.version,
+                                   "Already in repository" + (f" (newer files unavailable: {failures[0]})"
+                                                              if failures else ""))
 
             note = selection_note(chosen, candidates, len(sources))
             self.db.log_event("check", note, app_id=app_id, version=chosen.version,
                               level="info", details={"selected": describe(chosen), "considered": considered,
                                                      "source_errors": errors, "download_failures": failures})
-
-            temp_file, sha, size, final_url, cd_name = chosen.downloaded
-            itype = self._installer_type(chosen, manifest_type, temp_file)
-            msi_info = self._msi_info(temp_file) if itype in MSI_TYPES or temp_file.suffix.lower() == ".msi" else None
-            version = chosen.version
-            if version in existing:
-                self.delete_version(app_id, version)
-                if replace_type:
-                    self.db.log_event("update", f"Replacing the stored {replace_type} installer of {version} "
-                                      f"with the preferred {itype}", app_id=app_id, version=version)
-
-            result = self._store(app_id, version, temp_file, temp_file.name, sha, size, chosen, itype,
-                                 msi_info, final_url)
+            result = self._ingest(app_id, chosen, existing, replace_type)
             self._set_status(app_id, "updated", state=new_state)
-            purged = self.apply_retention(app_id)
-            msg = f"Downloaded version {version} ({itype}). {note}"
-            if purged:
-                msg += f"; purged {', '.join(purged)}"
-            return CheckResult(app_id, "updated", version, msg + result)
+            return CheckResult(app_id, "updated", chosen.version, result + f" {note}")
         except Exception as exc:  # noqa: BLE001 - never let one app kill the scheduler
             log.exception("Check failed for %s", app_id)
             self._set_status(app_id, "failed", error=str(exc))
@@ -295,6 +300,83 @@ class Updater:
             for d in temp_dirs:
                 shutil.rmtree(d, ignore_errors=True)
 
+    def _ingest(self, app_id: str, chosen: ReleaseInfo, existing: dict, replace_type: str | None) -> str:
+        """Store a downloaded or uploaded file as a version, then apply retention."""
+        temp_file, sha, size, final_url, _ = chosen.downloaded
+        info: FileInfo = chosen.inspected
+        version = chosen.version
+        if version in existing:
+            self.delete_version(app_id, version)
+            if replace_type:
+                self.db.log_event("update", f"Replacing the stored {replace_type} installer of {version} "
+                                  f"with the preferred {info.installer_type}", app_id=app_id, version=version)
+        result = self._store(app_id, version, temp_file, temp_file.name, sha, size, chosen, info, final_url)
+        purged = self.apply_retention(app_id)
+        msg = f"Stored version {version} ({info.installer_type})."
+        if purged:
+            msg += f" Purged {', '.join(purged)}."
+        return msg + result
+
+    def _inspect(self, c: ReleaseInfo, extra: dict, manifest_type: str | None) -> FileInfo:
+        path = c.downloaded[0]
+        return inspect_file(path, setup_file=extra.get("setup_file"), declared_type=manifest_type,
+                            candidate_type=c.installer_type, extract_to=path.parent / "extracted")
+
+    def _check_signature(self, app_id: str, c: ReleaseInfo, extra: dict) -> None:
+        signer = extra.get("signer")
+        if not signer:
+            return
+        info: FileInfo = c.inspected
+        target = info.setup_dir / info.setup_name if info.setup_dir else c.downloaded[0]
+        ok, detail = verify_signature(target, signer)
+        if ok is False:
+            raise ValueError(f"signature check failed for {target.name} ({detail})")
+        self.db.log_event("download", f"{target.name}: {'signature OK' if ok else detail}", app_id=app_id,
+                          version=c.version, level="info" if ok else "error")
+
+    def import_installer(self, app_id: str, file_path: Path, filename: str | None = None,
+                         version: str | None = None, replace: bool = False,
+                         source_label: str = "upload") -> CheckResult:
+        """Add an installer file supplied by an administrator (manual applications or extra versions)."""
+        with self.db.session() as s:
+            app = self.db.get_app(s, app_id)
+            if app is None:
+                raise KeyError(f"Unknown application '{app_id}'")
+            app_id = app.app_id
+            existing = {v.version: v.installer_type for v in app.versions if v.status == "available"}
+            manifest_type = app.installer_type
+            extra = dict(app.extra or {})
+        temp_dir = Path(tempfile.mkdtemp(dir=self.repo.tmp, prefix=safe_segment(app_id) + "-upload-"))
+        try:
+            name = safe_segment(filename or file_path.name)
+            target = temp_dir / name
+            shutil.copyfile(file_path, target)
+            sha = hashlib.sha256()
+            with open(target, "rb") as fh:
+                while chunk := fh.read(1024 * 1024):
+                    sha.update(chunk)
+            size = target.stat().st_size
+            if size == 0:
+                raise ValueError("The uploaded file is empty")
+            c = ReleaseInfo(version=version, url=f"{source_label}://{name}", filename=name,
+                            source_type="manual")
+            c.downloaded = (target, sha.hexdigest(), size, f"{source_label}://{name}", None)
+            c.inspected = self._inspect(c, extra, manifest_type)
+            c.version = version or c.inspected.msi_version
+            if not c.version:
+                raise ValueError("A version is required: it could not be read from the file "
+                                 "(only MSI files carry one)")
+            if c.version in existing and not replace:
+                raise ValueError(f"Version {c.version} is already in the repository (use replace)")
+            self._check_signature(app_id, c, extra)
+            self.db.log_event("download", f"Imported {name} as version {c.version}", app_id=app_id,
+                              version=c.version)
+            msg = self._ingest(app_id, c, existing, None)
+            self._set_status(app_id, "updated")
+            return CheckResult(app_id, "updated", c.version, msg)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
     def _download(self, client: httpx.Client, app_id: str, c: ReleaseInfo, temp_dirs: list[Path]):
         temp_dir = Path(tempfile.mkdtemp(dir=self.repo.tmp, prefix=safe_segment(app_id) + "-"))
         temp_dirs.append(temp_dir)
@@ -304,24 +386,12 @@ class Updater:
         path.rename(named)
         return named, sha, size, final_url, cd_name
 
-    @staticmethod
-    def _installer_type(c: ReleaseInfo, manifest_type: str | None, path: Path) -> str:
-        """The candidate's specific type wins; generic 'exe' defers to the manifest, then the file."""
-        known = c.installer_type or type_from_filename(path.name)
-        if known and known != "exe":
-            return known
-        return manifest_type or guess_installer_type(path)
-
-    @staticmethod
-    def _msi_info(path: Path) -> dict | None:
-        try:
-            return msi_summary(path)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Could not read MSI properties of %s: %s", path.name, exc)
-            return None
-
     def _store(self, app_id: str, version: str, temp_file: Path, filename: str, sha: str, size: int,
-               release: ReleaseInfo, itype: str, msi_info: dict | None, final_url: str) -> str:
+               release: ReleaseInfo, info: FileInfo, final_url: str) -> str:
+        itype = info.installer_type
+        msi_info = dict(info.msi_info) if info.msi_info else None
+        if info.target_product_codes:
+            msi_info = {**(msi_info or {}), "TargetProductCodes": info.target_product_codes}
         rel = self.repo.store_installer(app_id, version, temp_file, filename)
         with self.db.session() as s:
             app = self.db.get_app(s, app_id)
@@ -330,6 +400,7 @@ class Updater:
                 version=version,
                 status="available",
                 filename=Path(str(rel)).name,
+                setup_path=info.setup_path,
                 relative_path=str(rel),
                 local_path=str(self.repo.abs(rel)),
                 unc_path=self.repo.unc(rel),
@@ -341,7 +412,7 @@ class Updater:
                 installer_type=itype,
                 architecture=release.architecture or app.architecture,
                 scope=release.scope or app.scope,
-                product_code=release.product_code or (msi_info or {}).get("ProductCode"),
+                product_code=release.product_code or (info.msi_info or {}).get("ProductCode"),
                 upgrade_code=(msi_info or {}).get("UpgradeCode"),
                 msi_info=msi_info,
                 downloaded_at=utcnow(),
@@ -354,7 +425,10 @@ class Updater:
             self._finalize(app, row)
             self._refresh_latest(app)
             app.last_updated_at = utcnow()
-            intune = row.intune_status
+            intune, intune_error = row.intune_status, row.intune_error
+        if intune == "failed":
+            self.db.log_event("package", f"Intune packaging failed: {intune_error}", app_id=app_id,
+                              version=version, level="error")
         self.db.log_event("update", f"Added version {version} ({filename}, {size:,} bytes)",
                           app_id=app_id, version=version, details={"sha256": sha, "source": final_url})
         return "" if intune in ("ok", "disabled") else f"; Intune packaging {intune}"
@@ -365,7 +439,7 @@ class Updater:
         display_rx = detection.get("display_name") or "^" + re.escape(app.name)
 
         cmds = build_commands(
-            filename=row.filename,
+            filename=Path(row.setup_path).name if row.setup_path else row.filename,
             installer_type=row.installer_type,
             # manifest install_args win over switches published by the source
             install_args=app.install_args if app.install_args is not None else row.source_silent_args,
@@ -375,6 +449,7 @@ class Updater:
             uninstall_args=app.uninstall_args,
             display_name_regex=display_rx,
             version=row.version,
+            key_pattern=detection.get("key_pattern"),
         )
         row.install_executable = cmds.install_executable
         row.install_arguments = cmds.install_arguments
@@ -397,7 +472,14 @@ class Updater:
         txt_rel = vrel / "intune" / f"{base}.intune.txt"
         det_rel = vrel / "intune" / f"{base}.detect.ps1"
         installer_dir = self.repo.abs(row.relative_path).parent
+        setup_name = row.filename
+        work_dir = None
         try:
+            if row.setup_path:   # archive: package the folder that contains the setup file
+                work_dir = Path(tempfile.mkdtemp(dir=self.repo.tmp, prefix="package-"))
+                safe_extract(self.repo.abs(row.relative_path), work_dir)
+                setup = work_dir / row.setup_path
+                installer_dir, setup_name = setup.parent, setup.name
             out = self.repo.abs(pkg_rel)
             out.parent.mkdir(parents=True, exist_ok=True)
             msi = dict(row.msi_info or {})
@@ -406,19 +488,22 @@ class Updater:
                 msi.setdefault("ProductVersion", row.version)
             if icfg.get("packager") == "official":
                 create_intunewin_official(Path(icfg.get("intunewinapputil_path") or ""), installer_dir,
-                                          row.filename, out)
+                                          setup_name, out)
             else:
-                create_intunewin_native(installer_dir, row.filename, out,
+                create_intunewin_native(installer_dir, setup_name, out,
                                         msi_info=msi if row.installer_type in MSI_TYPES else None)
             self.repo.abs(det_rel).write_text(
                 detection_script(app_name=app.name, version=row.version, display_name_regex=display_rx,
-                                 product_code=row.product_code if row.installer_type in MSI_TYPES else None),
+                                 product_code=row.product_code if row.installer_type in MSI_TYPES else None,
+                                 key_pattern=(app.detection or {}).get("key_pattern")),
                 encoding="utf-8-sig")
             self.repo.abs(txt_rel).write_text(deployment_text(
                 app={"name": app.name, "publisher": app.publisher, "description": app.description,
                      "homepage": app.homepage, "category": app.category, "scope": app.scope},
                 version={"version": row.version, "installer_type": row.installer_type,
-                         "scope": row.scope, "intunewin_name": out.name, "filename": row.filename,
+                         "scope": row.scope, "intunewin_name": out.name, "filename": setup_name,
+                         "archive": row.filename if row.setup_path else None,
+                         "target_product_codes": (row.msi_info or {}).get("TargetProductCodes"),
                          "architecture": row.architecture, "sha256": row.sha256,
                          "source_url": row.source_url, "downloaded_at": row.downloaded_at or utcnow(),
                          "install_command": row.install_command,
@@ -433,9 +518,11 @@ class Updater:
             row.intune_status, row.intune_error = "ok", None
         except Exception as exc:  # noqa: BLE001
             log.exception("Intune packaging failed for %s %s", app.app_id, row.version)
+            # Logged by the caller once its transaction is closed (SQLite allows one writer)
             row.intune_status, row.intune_error = "failed", str(exc)
-            self.db.log_event("package", f"Intune packaging failed: {exc}", app_id=app.app_id,
-                              version=row.version, level="error")
+        finally:
+            if work_dir is not None:
+                shutil.rmtree(work_dir, ignore_errors=True)
 
     def _refresh_latest(self, app: Application) -> None:
         available = [v for v in app.versions if v.status == "available"]
@@ -447,7 +534,8 @@ class Updater:
     def _metadata(self, app: Application, row: AppVersion) -> dict[str, Any]:
         return {
             "app_id": app.app_id, "name": app.name, "publisher": app.publisher,
-            "version": row.version, "filename": row.filename, "sha256": row.sha256,
+            "version": row.version, "filename": row.filename, "setup_path": row.setup_path,
+            "sha256": row.sha256,
             "size_bytes": row.size_bytes, "installer_type": row.installer_type,
             "architecture": row.architecture, "scope": row.scope,
             "install_command": row.install_command, "uninstall_command": row.uninstall_command,

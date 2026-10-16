@@ -21,7 +21,8 @@ if (Test-Path -LiteralPath $modulePath) { Import-Module $modulePath -Force } els
 # ----------------------------------------------------------------------------- argument parsing
 $positional = New-Object System.Collections.Generic.List[string]
 $opts = @{}
-$flagsWithValue = 'version', 'category', 'dest', 'server', 'last', 'app', 'method', 'file', 'arch', 'id', 'limit'
+$flagsWithValue = 'version', 'category', 'dest', 'server', 'last', 'app', 'method', 'file', 'arch', 'id', 'limit',
+    'name', 'publisher', 'description', 'homepage', 'type', 'args', 'uninstall', 'setup-file', 'detect', 'installer'
 $argsList = @($CommandLine | Where-Object { $null -ne $_ })
 for ($i = 0; $i -lt $argsList.Count; $i++) {
     $a = $argsList[$i]
@@ -117,7 +118,11 @@ ADD APPLICATIONS TO THE REPOSITORY                                              
   app add <wingetId> [--category C]  Add from winget [--arch x64] [--check] [--replace] [--yes]
   app add --file <manifest.yaml>     Add from a manifest file [--check] [--replace]
   app test <wingetId>|--file F|--id ID   Preview sources and the installer that would be used
-  app template <type>                Manifest template: winget github web json url multi
+  app template <type>                Manifest template: winget github web json url multi adobe manual
+  app create <id> --name "Name"      Manual application (you upload installers) [--publisher P]
+                                     [--category C] [--type msi|exe|inno|...] [--args "..."]
+                                     [--uninstall "..."] [--detect "regex"] [--installer FILE --version V]
+  app upload <id> <file> [--version V]   Upload an installer as a new version [--replace]
   app remove <id> [--delete-files]   Remove an application [--yes]
 
 CLIENT
@@ -139,7 +144,7 @@ EXIT CODES
     'install' = "depot install <id> [<id>...] [--version V] [--force] [--keep]`n`nInstalls applications silently from the repository. Equivalent cmdlet: Install-DepotApp.`n  --version V   install a specific stored version (default latest)`n  --force       reinstall even if the same or newer version is installed`n  --keep        keep the installer in the local cache"
     'upgrade' = "depot upgrade                 list available updates`ndepot upgrade <id> [<id>...]  update specific applications`ndepot upgrade --all           update everything`n`nEquivalent cmdlets: Get-DepotUpdate, Update-DepotApp."
     'config'  = "depot config                        show configuration`ndepot config set <name> <value>     change a setting`n`nNames: ServerUrl, TransferMethod (Auto|Unc|Http), CachePath, LogPath, TimeoutSec,`n       InstallTimeoutMinutes, KeepInstallers (true|false), ApiKey`nExample: depot config set ServerUrl http://appdepot.corp.example.com:8080"
-    'app'     = "depot app search <query>`ndepot app add <wingetId> [--category C] [--arch x64|x86|arm64] [--check] [--replace] [--yes]`ndepot app add --file <manifest.yaml> [--check] [--replace] [--yes]`ndepot app test <wingetId> | --file <manifest.yaml> | --id <appId>`ndepot app template winget|github|web|json|url|multi`ndepot app remove <id> [--delete-files] [--yes]`n`nThe server checks every source of an application and prefers an MSI installer.`n'app test' and 'app add' show which installer will be used before anything is saved.`n--check downloads the application immediately. Requires the API key (depot config set ApiKey <key>)."
+    'app'     = "depot app search <query>`ndepot app add <wingetId> [--category C] [--arch x64|x86|arm64] [--check] [--replace] [--yes]`ndepot app add --file <manifest.yaml> [--check] [--replace] [--yes]`ndepot app test <wingetId> | --file <manifest.yaml> | --id <appId>`ndepot app template winget|github|web|json|url|multi|adobe|manual`ndepot app create <id> --name `"Name`" [--publisher P] [--category C] [--type msi|exe|inno|nullsoft|burn|msp|msix] [--args `"...`"] [--uninstall `"...`"] [--setup-file setup.exe] [--detect `"regex`"] [--installer FILE] [--version V]`ndepot app upload <id> <file> [--version V] [--replace]`ndepot app remove <id> [--delete-files] [--yes]`n`nThe server checks every source of an application and prefers an MSI installer.`nManual applications are not downloaded: create them with 'app create' and add versions with 'app upload' (the version is read from MSI files).`n'app test' and 'app add' show which installer will be used before anything is saved.`n--check downloads the application immediately. Requires the API key (depot config set ApiKey <key>)."
     'server'  = "depot server check [<id>...] [--force] [--wait]`ndepot server schedule global `"0 3 * * *`"`ndepot server schedule <id> `"0 */6 * * *`" | manual | global`n`nCron format: minute hour day-of-month month day-of-week. Requires the API key:`n  depot config set ApiKey <key>   (or set APPDEPOT_API_KEY)"
 }
 
@@ -304,8 +309,28 @@ try {
                     if ($opts.check) { Write-Info "Download started on the server. Follow it with: depot events --app $($r.Id)" }
                     else { Write-Info "It will be downloaded at the next scheduled check, or now with: depot server check $($r.Id)" }
                 }
+                'create' {
+                    if (-not $subArgs.Count -or -not $opts.name) { Write-Host 'Usage: depot app create <id> --name "Name" [options]  (depot help app)' -ForegroundColor Yellow; exit 2 }
+                    $p = @{ Id = $subArgs[0]; Name = $opts.name; Confirm = $false; Replace = [bool]$opts.replace }
+                    $map = @{ publisher = 'Publisher'; category = 'Category'; description = 'Description'; homepage = 'Homepage'
+                        type = 'InstallerType'; args = 'InstallArgs'; uninstall = 'UninstallCommand'; 'setup-file' = 'SetupFile'
+                        detect = 'DetectionName'; installer = 'InstallerPath'; version = 'Version' }
+                    foreach ($k in $map.Keys) { if ($opts[$k]) { $p[$map[$k]] = [string]$opts[$k] } }
+                    $r = New-DepotApp @p
+                    if (-not $r) { exit 1 }
+                    if ($json) { Write-Out $r; exit 0 }
+                    Write-Info "Created manual application $($r.Id) ($($r.ManifestPath))." Green
+                    if ($r.LatestVersion) { Write-Info "Uploaded version $($r.LatestVersion)." Green }
+                    else { Write-Info "Add installers with: depot app upload $($r.Id) <file> [--version V]" }
+                }
+                'upload' {
+                    if ($subArgs.Count -lt 2) { Write-Host 'Usage: depot app upload <id> <file> [--version V] [--replace]' -ForegroundColor Yellow; exit 2 }
+                    $r = Publish-DepotInstaller -Id $subArgs[0] -Path $subArgs[1] -Version ([string]$opts.version) -Replace:([bool]$opts.replace) -Confirm:$false
+                    if (-not $r) { exit 1 }
+                    Exit-WithResults $r
+                }
                 'template' {
-                    if (-not $subArgs.Count) { Write-Host 'Usage: depot app template winget|github|web|json|url|multi' -ForegroundColor Yellow; exit 2 }
+                    if (-not $subArgs.Count) { Write-Host 'Usage: depot app template winget|github|web|json|url|multi|adobe|manual' -ForegroundColor Yellow; exit 2 }
                     Get-DepotManifestTemplate -Type $subArgs[0] | Write-Output
                 }
                 { $_ -in 'remove', 'delete' } {

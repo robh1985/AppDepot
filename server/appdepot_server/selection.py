@@ -21,7 +21,7 @@ from .sources import ReleaseInfo, SourceContext, get_source
 from .sources.base import type_from_filename
 from .versioning import compare_versions, version_key
 
-DEFAULT_PREFERRED_TYPES = ["msi", "wix", "msix", "appx", "burn", "inno", "nullsoft", "exe"]
+DEFAULT_PREFERRED_TYPES = ["msi", "wix", "msp", "msix", "appx", "burn", "inno", "nullsoft", "exe"]
 MSI_FAMILY = {"msi", "wix"}
 
 
@@ -103,6 +103,8 @@ def selection_note(chosen: ReleaseInfo, candidates: list[ReleaseInfo], source_co
     where = f"{chosen.source_type} (source {chosen.source_index + 1} of {source_count})"
     if itype in MSI_FAMILY:
         return f"Selected MSI from {where}"
+    if itype == "msp":
+        return f"Selected MSP update patch from {where}"
     same_version = sorted({candidate_type(c) for c in candidates
                            if c.version and compare_versions(c.version, chosen.version) == 0})
     if MSI_FAMILY & set(same_version):

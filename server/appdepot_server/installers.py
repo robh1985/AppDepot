@@ -21,6 +21,7 @@ INSTALLER_TYPES: dict[str, dict[str, str]] = {
             "label": "Windows Installer (MSI)"},
     "wix": {"install": "/qn /norestart", "uninstall": "/qn /norestart",
             "label": "WiX MSI"},
+    "msp": {"install": "/qn /norestart", "uninstall": "", "label": "Windows Installer patch (MSP)"},
     "nullsoft": {"install": "/S", "uninstall": "/S", "label": "Nullsoft (NSIS)"},
     "inno": {"install": "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /ALLUSERS",
              "uninstall": "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
@@ -44,7 +45,7 @@ DEFAULT_RETURN_CODES = [
     (1618, "Retry (another installation is in progress)"),
 ]
 
-_EXT_TYPES = {".msi": "msi", ".msix": "msix", ".msixbundle": "msix", ".appx": "appx",
+_EXT_TYPES = {".msi": "msi", ".msp": "msp", ".msix": "msix", ".msixbundle": "msix", ".appx": "appx",
               ".appxbundle": "appx"}
 
 
@@ -102,6 +103,7 @@ def build_commands(
     uninstall_args: str | None = None,
     display_name_regex: str | None = None,
     version: str | None = None,
+    key_pattern: str | None = None,
 ) -> CommandSet:
     """Build the silent install and uninstall command lines for an installer.
 
@@ -113,9 +115,9 @@ def build_commands(
     args = install_args if install_args is not None else defaults["install"]
     args = _join(args, extra_args)
 
-    if itype in MSI_TYPES:
+    if itype in MSI_TYPES or itype == "msp":
         inst_exe = "msiexec.exe"
-        inst_args = _join("/i", _q(filename), args)
+        inst_args = _join("/p" if itype == "msp" else "/i", _q(filename), args)
         inst_cmd = _join("msiexec.exe", inst_args)
     elif itype in APPX_TYPES:
         inst_exe = "powershell.exe"
@@ -133,6 +135,8 @@ def build_commands(
     if uninstall_command:
         un_cmd = uninstall_command.format(**tokens)
         un_exe, un_args = split_command(un_cmd)
+    elif itype == "msp":
+        pass   # a patch is removed by uninstalling (or repairing) the product it updates
     elif itype in MSI_TYPES and product_code:
         un_exe = "msiexec.exe"
         un_args = _join("/x", product_code, uninstall_args or defaults["uninstall"])
@@ -150,20 +154,21 @@ def build_commands(
         silent = uninstall_args if uninstall_args is not None else defaults["uninstall"]
         un_exe = "powershell.exe"
         un_args = "-NoProfile -ExecutionPolicy Bypass -Command \"" + registry_uninstall_script(
-            display_name_regex, silent) + "\""
+            display_name_regex, silent, key_pattern) + "\""
         un_cmd = _join(un_exe, un_args)
 
     return CommandSet(inst_exe, inst_args, inst_cmd, un_exe, un_args, un_cmd)
 
 
-def registry_uninstall_script(display_name_regex: str, silent_args: str) -> str:
+def registry_uninstall_script(display_name_regex: str, silent_args: str, key_pattern: str | None = None) -> str:
     """Compact PowerShell (no double quotes) that finds and runs an uninstaller."""
     rx = display_name_regex.replace("'", "''")
     sa = silent_args.replace("'", "''")
+    key_filter = f" -and $_.PSChildName -match '{key_pattern.replace(chr(39), chr(39) * 2)}'" if key_pattern else ""
     return (
         "$k='HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
         "'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*';"
-        f"$a=Get-ItemProperty $k -EA 0|?{{$_.DisplayName -match '{rx}'}}|select -First 1;"
+        f"$a=Get-ItemProperty $k -EA 0|?{{$_.DisplayName -match '{rx}'{key_filter}}}|select -First 1;"
         "if(!$a){exit 0};"
         "if($a.UninstallString -match 'msiexec'){$p=Start-Process msiexec.exe "
         "-ArgumentList ('/x '+$a.PSChildName+' /qn /norestart') -Wait -PassThru}"
