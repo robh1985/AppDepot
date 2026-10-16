@@ -67,7 +67,7 @@ or a PowerShell module.
 | `server/appdepot_server/` | Server (Python 3.10+, FastAPI, SQLAlchemy, APScheduler) |
 | `server/manifests/` | Application definitions (YAML) — 53 ready to use, converted from `SyncScripts/` |
 | `SyncScripts/` | The original per-application sync scripts (reference; see docs/converted-sync-scripts.md) |
-| `server/deploy/` | Windows installer script, systemd unit, Samba share snippet |
+| `server/deploy/` | Windows install and uninstall scripts, systemd unit, Samba share snippet |
 | `server/tests/` | Server test suite (pytest) |
 | `client/AppDepot/` | PowerShell module (Windows PowerShell 5.1 and PowerShell 7) incl. WPF GUI |
 | `client/depot.ps1`, `depot.cmd` | Command-line client |

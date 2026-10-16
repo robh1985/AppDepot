@@ -67,6 +67,22 @@ Then fetch the first versions:
 D:\AppDepot\venv\Scripts\appdepot-server.exe --config D:\AppDepot\appdepot.yaml check
 ```
 
+### Uninstalling
+
+```powershell
+cd AppDepot\server\deploy
+.\Uninstall-AppDepotServer.ps1 -WhatIf                     # show what would be removed
+.\Uninstall-AppDepotServer.ps1                             # remove everything (asks first)
+.\Uninstall-AppDepotServer.ps1 -KeepRepository -BackupPath D:\AppDepot-backup
+```
+
+It finds the program folder from the registered service or task and the repository from
+`appdepot.yaml`, then removes the service or startup task, firewall rules, SMB share, program
+folder and repository. `-KeepRepository` keeps the installers, Intune packages and share (for
+computers or Intune apps that still install from them); `-KeepConfig` keeps `appdepot.yaml`, the
+database and manifests for a later reinstall; `-BackupPath` copies those first. Python is not
+removed. Remove the client from computers with `Install-AppDepotClient.ps1 -Uninstall`.
+
 ## Installation on Linux
 
 ```bash
