@@ -1,3 +1,5 @@
+# Converted from SyncScripts/7Zip.ps1: GitHub releases of ip7z/7zip, MSI verified against
+# GitHub's SHA-256 digest (7-Zip installers are not Authenticode-signed).
 id: 7zip.7zip
 name: 7-Zip
 publisher: Igor Pavlov
@@ -7,16 +9,14 @@ license: LGPL-2.1
 category: Utilities
 tags: [archive, compression, zip]
 
-# Two sources: winget only lists 7-Zip's EXE installer, while 7-zip.org also
-# publishes an MSI. Both are checked and the MSI is preferred.
 sources:
-  - type: web
+  - type: github
+    repo: ip7z/7zip
+    asset_pattern: '^7z\d+-x64\.msi$'
+  - type: web                       # fallback: 7-zip.org
     url: https://www.7-zip.org/download.html
     version_regex: 'Download 7-Zip (?P<version>\d+\.\d+)'
     download_url: https://www.7-zip.org/a/7z{version_nodots}-x64.msi
-  - type: winget
-    package: 7zip.7zip
-    architecture: x64
 
 detection:
   display_name: '^7-Zip'

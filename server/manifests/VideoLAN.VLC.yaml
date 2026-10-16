@@ -1,3 +1,5 @@
+# Converted from SyncScripts/VLC.ps1: VideoLAN's "last" download folder gives the version;
+# the MSI comes from the version's permanent folder. Signature: VideoLAN.
 id: VideoLAN.VLC
 name: VLC media player
 publisher: VideoLAN
@@ -8,9 +10,14 @@ category: Multimedia
 tags: [video, audio, player]
 
 source:
-  type: winget
-  package: VideoLAN.VLC
-  architecture: x64
+  type: web
+  url: https://download.videolan.org/pub/videolan/vlc/last/win64/
+  version_regex: 'vlc-(?P<version>\d+\.\d+\.\d+)-win64\.msi'
+  download_url: https://download.videolan.org/pub/videolan/vlc/{version}/win64/vlc-{version}-win64.msi
+
+installer:
+  type: msi
+  signer: VideoLAN
 
 detection:
   display_name: '^VLC media player'

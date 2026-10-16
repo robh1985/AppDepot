@@ -35,10 +35,24 @@ function Get-DepotUninstallEntry {
         Reads Programs and Features entries from the registry (machine 64/32-bit and current user).
     #>
     [CmdletBinding()]
-    param()
+    param([switch] $IncludeAppx)
     if (-not (Test-DepotWindows)) {
         Write-Verbose 'Installed-application detection is only available on Windows.'
         return
+    }
+    if ($IncludeAppx) {
+        # MSIX/AppX apps (e.g. Teams) are not in Programs and Features: report provisioned
+        # packages (all users) or, without admin rights, the current user's packages.
+        $appx = @()
+        try { $appx = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop | ForEach-Object { @{ Name = $_.DisplayName; Version = [string]$_.Version; Scope = 'Provisioned' } }) }
+        catch { try { $appx = @(Get-AppxPackage -ErrorAction Stop | ForEach-Object { @{ Name = $_.Name; Version = [string]$_.Version; Scope = 'User' } }) } catch { } }
+        foreach ($a in $appx) {
+            [pscustomobject]@{
+                DisplayName = $a.Name; DisplayVersion = $a.Version; Publisher = ''; KeyName = "appx:$($a.Name)"
+                UninstallString = ''; QuietUninstallString = ''; WindowsInstaller = $false; InstallLocation = ''
+                Scope = $a.Scope; RegistryArch = ''
+            }
+        }
     }
     $roots = @(
         @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'; Scope = 'Machine'; Arch = 'x64' },
@@ -80,8 +94,13 @@ function Find-DepotInstalledEntry {
     )
     $codes = @($Detection.product_codes | Where-Object { $_ })
     $matched = @(foreach ($e in $Entries) {
+            if ($Detection.appx_name) {
+                if ($e.KeyName -eq "appx:$($Detection.appx_name)") { $e }
+                continue
+            }
             if ($codes -contains $e.KeyName) { $e; continue }
             if ($Detection.match_codes_only) { continue }
+            if ($Detection.exclude -and $e.DisplayName -match $Detection.exclude) { continue }
             if ($Detection.key_pattern -and $e.KeyName -notmatch $Detection.key_pattern) { continue }
             if ($Detection.display_name -and $e.DisplayName -match $Detection.display_name) {
                 if ($Detection.publisher -and $e.Publisher -notmatch $Detection.publisher) { continue }

@@ -13,11 +13,13 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import os
 import re
 import shutil
+import struct
 import subprocess
 import zipfile
 from dataclasses import dataclass, field
@@ -40,10 +42,27 @@ class FileInfo:
     setup_dir: Path | None = None          # extracted folder containing the setup file
     msi_info: dict | None = None
     target_product_codes: list[str] = field(default_factory=list)
+    file_version: str | None = None        # MSIX manifest or EXE version resource
+    texts: list[str] = field(default_factory=list)   # MSI property values + summary information
 
     @property
     def msi_version(self) -> str | None:
         return (self.msi_info or {}).get("ProductVersion")
+
+    @property
+    def version(self) -> str | None:
+        """Version carried by the file itself: MSI ProductVersion, MSIX manifest, EXE resource."""
+        return self.msi_version or self.file_version
+
+    def find_text_version(self, pattern: str) -> str | None:
+        """Highest match of a regex in the MSI's texts (e.g. Chrome's real version)."""
+        from .versioning import max_version
+        found = []
+        for text in self.texts:
+            for m in re.finditer(pattern, text or ""):
+                found.append(m.group("version") if "version" in m.groupdict()
+                             else (m.group(1) if m.groups() else m.group(0)))
+        return max_version(found)
 
 
 def is_archive(path: Path) -> bool:
@@ -63,6 +82,7 @@ def safe_extract(archive: Path, target: Path) -> Path:
 
 
 def find_setup(extract_dir: Path, setup_file: str | None) -> Path:
+    """setup_file: a file name, a relative path, or a wildcard pattern such as '*.msi'."""
     if setup_file and ("/" in setup_file or "\\" in setup_file):
         p = extract_dir / setup_file.replace("\\", "/")
         if p.is_file():
@@ -71,7 +91,7 @@ def find_setup(extract_dir: Path, setup_file: str | None) -> Path:
     files = sorted((p for p in extract_dir.rglob("*") if p.is_file()), key=lambda p: (len(p.parts), str(p)))
     if setup_file:
         for p in files:
-            if p.name.lower() == setup_file.lower():
+            if p.name.lower() == setup_file.lower() or fnmatch.fnmatch(p.name.lower(), setup_file.lower()):
                 return p
         raise ValueError(f"'{setup_file}' was not found in the archive")
     for pattern in ("setup.exe", "*.msi", "*.exe"):
@@ -92,6 +112,72 @@ def msp_targets(path: Path) -> list[str]:
     if isinstance(template, bytes):
         template = template.decode("latin-1", "replace")
     return [t.strip().upper() for t in (template or "").split(";") if GUID_RE.match(t.strip().upper())]
+
+
+def pe_version(path: Path) -> str | None:
+    """FileVersion from an EXE's VS_FIXEDFILEINFO block (no Windows APIs needed)."""
+    signature = b"\xbd\x04\xef\xfe"
+    chunk_size, overlap = 4 * 1024 * 1024, 64
+    try:
+        with open(path, "rb") as fh:
+            offset, tail = 0, b""
+            while True:
+                chunk = fh.read(chunk_size)
+                if not chunk:
+                    return None
+                data = tail + chunk
+                pos = data.find(signature)
+                while pos != -1:
+                    block = data[pos:pos + 52]
+                    if len(block) < 20:
+                        fh.seek(offset - len(tail) + pos)
+                        block = fh.read(52)
+                    _, struc, ms, ls = struct.unpack("<IIII", block[:16])
+                    if struc in (0x00010000, 0x00000000) and (ms or ls):
+                        return f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
+                    pos = data.find(signature, pos + 4)
+                tail = data[-overlap:]
+                offset += len(chunk)
+    except OSError:
+        return None
+
+
+def msix_version(path: Path) -> str | None:
+    """Identity Version from an .msix/.appx (AppxManifest.xml) or a bundle's manifest."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = {n.lower(): n for n in zf.namelist()}
+            for candidate in ("appxmanifest.xml", "appxmetadata/appxbundlemanifest.xml"):
+                if candidate in names:
+                    xml = zf.read(names[candidate]).decode("utf-8", "replace")
+                    m = re.search(r"<Identity\b[^>]*\bVersion=\"([\d.]+)\"", xml)
+                    if m:
+                        return m.group(1)
+    except (OSError, zipfile.BadZipFile):
+        return None
+    return None
+
+
+def msi_texts(path: Path) -> list[str]:
+    """MSI property values (except ProductVersion) and summary title/subject/keywords/comments."""
+    from .msi import read_msi_properties
+    texts = []
+    try:
+        texts += [v for k, v in read_msi_properties(path).items() if k != "ProductVersion" and v]
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        with olefile.OleFileIO(str(path)) as ole:
+            meta = ole.get_metadata()
+        for attr in ("title", "subject", "keywords", "comments"):
+            value = getattr(meta, attr, None)
+            if isinstance(value, bytes):
+                value = value.decode("latin-1", "replace")
+            if value:
+                texts.append(value)
+    except Exception:  # noqa: BLE001
+        pass
+    return texts
 
 
 def _msi(path: Path) -> dict | None:
@@ -115,15 +201,25 @@ def inspect_file(path: Path, *, setup_file: str | None = None, declared_type: st
                 msi_info = _msi(m)
                 if msi_info:
                     break
-        return FileInfo(installer_type=itype, setup_path=str(PurePosixPath(*setup.relative_to(extract_dir).parts)),
+        info = FileInfo(installer_type=itype, setup_path=str(PurePosixPath(*setup.relative_to(extract_dir).parts)),
                         setup_name=setup.name, setup_dir=setup.parent, msi_info=msi_info)
+        if setup.suffix.lower() == ".msi":
+            info.texts = msi_texts(setup)
+        elif not msi_info and setup.suffix.lower() == ".exe":
+            info.file_version = pe_version(setup)
+        return info
 
     itype = _resolve_type(path, declared_type, candidate_type)
     info = FileInfo(installer_type=itype)
     if itype in ("msi", "wix") or path.suffix.lower() == ".msi":
         info.msi_info = _msi(path)
+        info.texts = msi_texts(path)
     elif itype == "msp":
         info.target_product_codes = msp_targets(path)
+    elif itype in ("msix", "appx"):
+        info.file_version = msix_version(path)
+    elif path.suffix.lower() == ".exe":
+        info.file_version = pe_version(path)
     return info
 
 

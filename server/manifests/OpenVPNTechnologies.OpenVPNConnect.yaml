@@ -1,0 +1,29 @@
+# Converted from SyncScripts/OpenVPNConnect.ps1: OpenVPN's release notes give the newest
+# version and build ("3.9.0 (5008)") and the SHA-256 of each MSI; winget is the fallback.
+id: OpenVPNTechnologies.OpenVPNConnect
+name: OpenVPN Connect
+publisher: OpenVPN Inc.
+description: OpenVPN Connect client (64-bit MSI).
+homepage: https://openvpn.net/client/
+license: Proprietary
+category: Networking
+tags: [vpn]
+
+sources:
+  - type: web
+    url: https://openvpn.net/connect-docs/windows-release-notes.html
+    browser: true
+    strip_html: true
+    version_regex: '(?<![\d.])(?P<v>[3-9]\.\d{1,2}\.\d{1,2})\s*\((?P<b>\d{3,6})\)'
+    version_format: '{v}.{b}'
+    download_url: https://packages.openvpn.net/connect/v3/openvpn-connect-{version}_signed.msi
+    sha256_regex: 'openvpn-connect-{version}_signed\.msi\W{0,40}?(?P<sha>[0-9a-fA-F]{64})'
+  - type: winget
+    package: OpenVPNTechnologies.OpenVPNConnect
+
+installer:
+  type: msi
+  signer: 'OpenVPN'
+
+detection:
+  display_name: '^OpenVPN Connect'

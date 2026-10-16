@@ -1,0 +1,23 @@
+# Converted from SyncScripts/VCRedist.ps1 (2010 SP1, x86).
+id: Microsoft.VCRedist.2010.x86
+name: Microsoft Visual C++ 2010 SP1 Redistributable (x86)
+publisher: Microsoft Corporation
+description: Visual C++ runtime libraries required by many applications.
+homepage: https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist
+license: Proprietary (free)
+category: Runtimes
+tags: [vcredist, runtime]
+
+source:
+  type: url
+  url: https://download.microsoft.com/download/1/6/5/165255E7-1014-4D0A-B094-B6A430A6BFFC/vcredist_x86.exe
+  version_from: fixed            # final release; Microsoft no longer updates it
+  version: '10.0.40219.325'
+
+installer:
+  type: exe
+  install_args: '/q /norestart'
+  signer: 'Microsoft Corporation'
+
+detection:
+  display_name: '^Microsoft Visual C\+\+ 2010\s+x86 Redistributable'

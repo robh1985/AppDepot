@@ -1,0 +1,23 @@
+# Converted from SyncScripts/Audacity.ps1. Audacity 3 and 4 install side by side, so each
+# track is its own application: 4.x is a WiX MSI (Program Files\Audacity 4).
+id: Audacity.Audacity.4
+name: Audacity 4
+publisher: Muse Group
+description: Free, open-source audio editor and recorder (Audacity 4.x).
+homepage: https://www.audacityteam.org
+license: GPL-3.0
+category: Multimedia
+tags: [audio, editor]
+
+source:
+  type: github
+  repo: audacity/audacity
+  tag_regex: '^Audacity-4\.'
+  asset_pattern: '^audacity-win-[\d.]+-x86_64\.msi$'
+  version_regex: '(\d+(?:\.\d+)+)'
+
+installer:
+  signer: 'MUSECY|Muse'
+
+detection:
+  display_name: '^Audacity 4'

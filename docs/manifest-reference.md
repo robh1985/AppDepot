@@ -38,6 +38,7 @@ installer:                          # optional: overrides for silent install
   setup_file: setup.exe             # for .zip installers: the file to run inside the archive
   signer: Adobe                     # require a valid Authenticode signature from this signer (regex)
   update_with: Vendor.App.Update    # an application holding update patches (.msp) for this one
+  requires: [Microsoft.VCRedist.2015+.x64]   # applications installed first when missing
   success_exit_codes: [0, 3010]     # added to 0, 1707, 3010, 1641
   preferred_types: [msi, wix, inno]  # override the server's installer preference for this app
 
@@ -46,6 +47,8 @@ detection:                          # how clients find the installed version
   publisher: '^Mozilla'             # optional regex on Publisher
   product_code: '{GUID}'            # optional, MSI product codes are added automatically
   key_pattern: '^\{AC76BA86-'      # optional regex on the uninstall registry key name
+  exclude: 'Maintenance Service'    # optional regex: ignore entries whose name matches
+  appx_name: MSTeams                # MSIX/AppX apps: the package name (instead of display_name)
 ```
 
 ## Installer preference (MSI first)
@@ -189,6 +192,27 @@ The server never downloads anything for a manual application. Add versions by up
 (`Publish-DepotInstaller`, `depot app upload`, the GUI's *Upload installer* tab or
 `appdepot-server app import`). See [adding-applications.md](adding-applications.md).
 A manual source cannot be combined with other sources.
+
+### Options shared by `web`, `json` and `url`
+
+| Option | Sources | Purpose |
+|---|---|---|
+| `headers: {Name: value}` | all | Extra request headers |
+| `browser: true` | all | Send browser-like headers (sites that block scripts) |
+| `version_from: file` | web, json, url | No version on the page/API: the version is read from the downloaded file (MSI ProductVersion, MSIX manifest, EXE version resource). An unchanged link or ETag is not downloaded again |
+| `strip_html: true` | web | Match `version_regex` against the page text without tags |
+| `version_format: '{v}.{b}'` | web | Build the version from named (or `{g1}`, `{g2}`) groups, e.g. OpenVPN's `3.9.0 (5008)` → `3.9.0.5008` |
+| `sha256_regex` | web | Find the SHA-256 on the page; `{version}` and `{filename}` placeholders, group `sha` |
+| `text_path` + `url_regex` | json | Find links inside an HTML field of the JSON (e.g. a help-center article) |
+| `sha256_path`, `sha512_path` | json | Hash to verify |
+| `version_regex` (with `version_from: file`) | url | Search the MSI's property values and summary information instead of using ProductVersion (Chrome) |
+| `version_api: {url, path}` | url | Fallback version from a JSON API |
+| `version_from: fixed` + `version` | url | Final releases that never change (old VC++ runtimes) |
+| `tag_regex` | github | Only releases whose tag matches: one application per product track |
+
+JSON paths support filters and selection: `Releases[?Platform=Windows&Architecture=x64]`
+keeps matching items, `[max:ProductVersion]` picks the item with the highest version, `[0]`
+/ `[-1]` index.
 
 ### URL template variables
 

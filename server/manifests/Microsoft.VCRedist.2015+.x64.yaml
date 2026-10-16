@@ -1,0 +1,23 @@
+# Converted from SyncScripts/VCRedist.ps1 (v14 (2015-2022), x64).
+id: Microsoft.VCRedist.2015+.x64
+name: Microsoft Visual C++ v14 (2015-2022) Redistributable (x64)
+publisher: Microsoft Corporation
+description: Visual C++ runtime libraries required by many applications.
+homepage: https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist
+license: Proprietary (free)
+category: Runtimes
+tags: [vcredist, runtime]
+
+source:
+  type: url
+  url: https://aka.ms/vc14/vc_redist.x64.exe
+  version_from: file             # version read from the installer's version resource
+
+installer:
+  type: burn
+  install_args: '/install /quiet /norestart'
+  uninstall_args: '/uninstall /quiet /norestart'
+  signer: 'Microsoft Corporation'
+
+detection:
+  display_name: '^Microsoft Visual C\+\+ 20(1[5-9]|2\d)(-20\d\d)? Redistributable \(x64\)'

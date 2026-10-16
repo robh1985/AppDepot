@@ -1,0 +1,24 @@
+# Converted from SyncScripts/Audacity.ps1. Audacity 3 and 4 install side by side, so each
+# track is its own application: 3.x is an Inno Setup EXE (Program Files\Audacity).
+id: Audacity.Audacity.3
+name: Audacity 3
+publisher: Muse Group
+description: Free, open-source audio editor and recorder (Audacity 3.x).
+homepage: https://www.audacityteam.org
+license: GPL-3.0
+category: Multimedia
+tags: [audio, editor]
+
+source:
+  type: github
+  repo: audacity/audacity
+  tag_regex: '^Audacity-3\.'
+  asset_pattern: '^audacity-win-[\d.]+-64bit\.exe$'
+  version_regex: '(\d+(?:\.\d+)+)'
+
+installer:
+  type: inno
+  signer: 'MUSECY|Muse'
+
+detection:
+  display_name: '^Audacity 3'

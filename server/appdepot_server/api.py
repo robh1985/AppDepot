@@ -111,12 +111,15 @@ def serialize_app(ctx: AppContext, app: Application, detail: bool = False) -> di
         "downloaded_at": _iso(latest.downloaded_at) if latest else None,
         "upgrade_behavior": app.upgrade_behavior,
         "update_with": (app.extra or {}).get("update_with"),
+        "requires": (app.extra or {}).get("requires") or [],
         "is_patch": (latest.installer_type if latest else app.installer_type) == "msp",
         "manual": app.is_manual,
         "detection": {
             "display_name": (app.detection or {}).get("display_name"),
             "publisher": (app.detection or {}).get("publisher"),
             "key_pattern": (app.detection or {}).get("key_pattern"),
+            "exclude": (app.detection or {}).get("exclude"),
+            "appx_name": (app.detection or {}).get("appx_name"),
             "product_codes": sorted({v.product_code for v in app.versions if v.product_code}
                                     | set(filter(None, [(app.detection or {}).get("product_code")]))
                                     | patch_targets),

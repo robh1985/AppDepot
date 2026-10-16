@@ -1,5 +1,9 @@
 # Adding applications
 
+53 applications are already defined in `server/manifests/` (see
+[converted-sync-scripts.md](converted-sync-scripts.md)). Delete the ones you do not need, or set
+`enabled: false`.
+
 There are several ways to add an application, all ending in the same place: a manifest file in the
 server's `manifests` folder and a row in the database. Whichever you use, AppDepot first
 **previews** the application, so you see before saving which version will be downloaded,

@@ -1,0 +1,25 @@
+# Converted from SyncScripts/Firefox.ps1 (-Channel ESR): Mozilla's version feed and release
+# archive (MSI, en-US, 64-bit), Authenticode signature (Mozilla).
+id: Mozilla.Firefox.ESR
+name: Mozilla Firefox ESR
+publisher: Mozilla
+description: Free and open-source web browser (ESR channel, MSI, en-US, 64-bit).
+homepage: https://www.mozilla.org/firefox/
+license: MPL-2.0
+category: Browsers
+tags: [browser]
+
+source:
+  type: json
+  url: https://product-details.mozilla.org/1.0/firefox_versions.json
+  version_path: FIREFOX_ESR
+  download_url: https://archive.mozilla.org/pub/firefox/releases/{version}/win64/en-US/Firefox%20Setup%20{version}.msi
+
+installer:
+  type: msi
+  signer: Mozilla
+  # install_args: '/qn /norestart DESKTOP_SHORTCUT=false INSTALL_MAINTENANCE_SERVICE=false'
+
+detection:
+  display_name: '^Mozilla Firefox'
+  exclude: 'Maintenance Service'

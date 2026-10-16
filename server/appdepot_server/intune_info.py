@@ -54,6 +54,10 @@ def deployment_text(*, app: dict, version: dict) -> str:
         lines += ["", "  This patch applies to these installed products (ProductCode):"]
         lines += [f"    {code}" for code in version["target_product_codes"]]
         lines += ["  Add a requirement rule so the patch only targets devices that have the product."]
+    if version.get("requires"):
+        lines += ["", "  DEPENDENCIES - add these AppDepot applications as Intune app dependencies",
+                  "  (Dependencies tab, 'Automatically install'):"]
+        lines += [f"    {dep}" for dep in version["requires"]]
     lines += ["", "REQUIREMENTS",
               f"  Operating system architecture ... {_arch_requirement(version.get('architecture'))}",
               "  Minimum operating system ........ Windows 10 1809", "",
@@ -97,10 +101,13 @@ def _arch_requirement(arch: str | None) -> str:
         (arch or "").lower(), "32-bit and 64-bit")
 
 
-def detection_script(*, app_name: str, version: str, display_name_regex: str,
-                     product_code: str | None = None, key_pattern: str | None = None) -> str:
+def detection_script(*, app_name: str, version: str, display_name_regex: str | None,
+                     product_code: str | None = None, key_pattern: str | None = None,
+                     exclude: str | None = None, appx_name: str | None = None) -> str:
     """Intune custom detection script: writes output + exit 0 when installed."""
-    rx = display_name_regex.replace("'", "''")
+    rx = (display_name_regex or "^$").replace("'", "''")
+    ex = (exclude or "").replace("'", "''")
+    ax = (appx_name or "").replace("'", "''")
     pc = (product_code or "").replace("'", "''")
     kp = (key_pattern or "").replace("'", "''")
     return f"""<#
@@ -114,6 +121,8 @@ $RequiredVersion = '{version}'
 $DisplayNamePattern = '{rx}'
 $ProductCode = '{pc}'
 $KeyPattern = '{kp}'
+$Exclude = '{ex}'
+$AppxName = '{ax}'
 
 function Get-VersionParts([string]$Version) {{
     @(($Version -replace '^[vV]', '') -split '[^0-9]+' | Where-Object {{ $_ -ne '' }} | ForEach-Object {{ [long]$_ }})
@@ -135,6 +144,16 @@ $roots = @(
     'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall'
 )
 
+if ($AppxName) {{
+    # MSIX/AppX app (e.g. Teams): provisioned for all users, or installed for any user
+    $pkgs = @(Get-AppxProvisionedPackage -Online | Where-Object {{ $_.DisplayName -eq $AppxName }} | ForEach-Object {{ [string]$_.Version }})
+    $pkgs += @(Get-AppxPackage -AllUsers -Name $AppxName | ForEach-Object {{ [string]$_.Version }})
+    foreach ($v in $pkgs) {{
+        if ((Compare-AppVersion $v $RequiredVersion) -ge 0) {{ Write-Output "Detected $AppxName $v"; exit 0 }}
+    }}
+    exit 1
+}}
+
 if ($ProductCode) {{
     foreach ($root in $roots) {{
         if (Test-Path (Join-Path $root $ProductCode)) {{
@@ -147,6 +166,7 @@ if ($ProductCode) {{
 $entries = foreach ($root in $roots) {{ Get-ChildItem $root | Get-ItemProperty }}
 foreach ($entry in $entries) {{
     if ($KeyPattern -and $entry.PSChildName -notmatch $KeyPattern) {{ continue }}
+    if ($Exclude -and $entry.DisplayName -match $Exclude) {{ continue }}
     if ($entry.DisplayName -match $DisplayNamePattern -and $entry.DisplayVersion) {{
         if ((Compare-AppVersion $entry.DisplayVersion $RequiredVersion) -ge 0) {{
             Write-Output "Detected $($entry.DisplayName) $($entry.DisplayVersion)"

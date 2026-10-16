@@ -75,6 +75,9 @@ def validate_manifest(m: dict[str, Any], origin: str = "<manifest>") -> dict[str
         errors.append(f"installer.type must be one of {sorted(INSTALLER_TYPES)}")
     if itype == "exe" and not installer.get("install_args"):
         errors.append("installer.install_args is required for generic 'exe' installers")
+    requires = installer.get("requires")
+    if requires is not None and (not isinstance(requires, list) or not all(APP_ID_RE.match(str(r)) for r in requires)):
+        errors.append("installer.requires must be a list of application ids")
     if installer.get("update_with") and not APP_ID_RE.match(str(installer["update_with"])):
         errors.append("installer.update_with must be an application id")
     if installer.get("signer"):
@@ -98,7 +101,7 @@ def validate_manifest(m: dict[str, Any], origin: str = "<manifest>") -> dict[str
         errors.append("retain_versions must be a positive integer")
 
     detection = m.get("detection") or {}
-    for key in ("display_name", "publisher", "key_pattern"):
+    for key in ("display_name", "publisher", "key_pattern", "exclude"):
         if detection.get(key):
             try:
                 re.compile(detection[key])
@@ -130,7 +133,7 @@ def manifest_hash(m: dict[str, Any]) -> str:
 def apply_manifest(app: Application, m: dict[str, Any]) -> None:
     installer = m.get("installer") or {}
     detection = dict(m.get("detection") or {})
-    if not detection.get("display_name"):
+    if not detection.get("display_name") and not detection.get("appx_name"):
         detection["display_name"] = "^" + re.escape(m["name"])
 
     app.app_id = m["id"]
@@ -152,7 +155,8 @@ def apply_manifest(app: Application, m: dict[str, Any]) -> None:
         app.source_type = "multi"
         app.source_config = {"sources": [dict(x) for x in sources]}
     app.preferred_types = installer.get("preferred_types")
-    app.extra = {k: installer[k] for k in ("setup_file", "signer", "update_with") if installer.get(k)} or None
+    app.extra = {k: installer[k] for k in ("setup_file", "signer", "update_with", "requires")
+                 if installer.get(k)} or None
     app.installer_type = installer.get("type")
     app.install_args = installer.get("install_args")
     app.uninstall_command = installer.get("uninstall_command")

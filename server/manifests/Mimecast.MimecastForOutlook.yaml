@@ -1,0 +1,26 @@
+# Converted from SyncScripts/MimecastOutlook.ps1: Mimecast's "Application Downloads" support
+# article (Zendesk Help Center API) holds the current link in the "Mimecast for Outlook" row.
+# The zip is downloaded only when that link changes; the version is read from the MSI inside.
+id: Mimecast.MimecastForOutlook
+name: Mimecast for Outlook
+publisher: Mimecast
+description: Mimecast add-in for Microsoft Outlook (32-bit MSI, matching 32-bit Office).
+homepage: https://www.mimecast.com
+license: Proprietary
+category: Communication
+tags: [email, outlook, security]
+
+source:
+  type: json
+  url: https://mimecastsupport.zendesk.com/api/v2/help_center/en-us/articles/36587212390291.json
+  text_path: article.body
+  url_regex: '(?is)>\s*Mimecast for Outlook\s*</h\d>(?:(?!</tr>).)*?<a\s[^>]*href="(?P<url>[^"]+)"[^>]*>\s*32-bit\s*</a>'
+  version_from: file
+
+installer:
+  type: msi
+  setup_file: '*.msi'
+  signer: Mimecast
+
+detection:
+  display_name: '^Mimecast for Outlook'

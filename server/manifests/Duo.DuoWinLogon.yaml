@@ -1,0 +1,28 @@
+# Converted from SyncScripts/DuoWinLogon.ps1: Duo's "latest" package zip (MSIs, policy
+# templates, documentation) has no version API; it is skipped when unchanged, otherwise the
+# version is read from the 64-bit MSI inside. Duo's MSIs need the Visual C++ runtime.
+id: Duo.DuoWinLogon
+name: Duo Authentication for Windows Logon
+publisher: Duo Security
+description: Duo two-factor authentication for Windows logon and RDP (64-bit MSI).
+homepage: https://duo.com/docs/rdp
+license: Proprietary
+category: Security
+tags: [mfa, security]
+
+source:
+  type: url
+  url: https://dl.duosecurity.com/DuoWinLogon_MSIs_Policies_and_Documentation-latest.zip
+  version_from: file
+
+installer:
+  type: msi
+  setup_file: DuoWindowsLogon64.msi          # Duo says not to rename its MSI files
+  signer: 'Duo Security|Cisco'
+  requires: [Microsoft.VCRedist.2015+.x64]
+  # Updates of an installed Duo keep its configuration. NEW installs need your keys, e.g.:
+  # install_args: '/qn /norestart IKEY="DIXXXXXXXXXXXXXXXXXX" SKEY="..." HOST="api-xxxxxxxx.duosecurity.com" AUTOPUSH="#1" FAILOPEN="#0" SMARTCARD="#0" RDPONLY="#0"'
+  # (the manifest is stored on the server; keep its permissions tight if it holds the secret key)
+
+detection:
+  display_name: '^Duo Authentication for Windows Logon'

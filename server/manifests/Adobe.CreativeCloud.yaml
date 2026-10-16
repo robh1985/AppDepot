@@ -1,0 +1,26 @@
+# Converted from SyncScripts/AdobeCCDesktop.ps1. Adobe publishes no downloadable Creative Cloud
+# desktop app installer: build a package with only the desktop app in the Admin Console
+# (Packages > Create a package > Managed package, no apps), download the zip, and upload it:
+#   Publish-DepotInstaller -Id Adobe.CreativeCloud -Path .\CC_Desktop_Only_en_US_WIN_64.zip -Version 6.10.0.123
+# (version: Help > About in Creative Cloud on a machine where the package was installed).
+id: Adobe.CreativeCloud
+name: Adobe Creative Cloud desktop app
+publisher: Adobe
+description: Adobe Creative Cloud desktop app (Admin Console package, 64-bit).
+homepage: https://adminconsole.adobe.com
+license: Proprietary (subscription)
+category: Multimedia
+tags: [adobe, creative cloud]
+
+source:
+  type: manual
+
+installer:
+  type: exe
+  setup_file: setup.exe                      # Build\setup.exe inside the package
+  install_args: '--silent'
+  uninstall_args: '-uninstall'
+  signer: Adobe
+
+detection:
+  display_name: '^Adobe Creative Cloud$'

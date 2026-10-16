@@ -1,0 +1,23 @@
+# Converted from SyncScripts/WatchGuardAuthClient.ps1. WatchGuard has no version feed; winget's
+# catalog records the official CDN link and SHA-256. (The script also probed the CDN for the
+# next likely version numbers; if a release is not in winget yet, upload it with
+# Publish-DepotInstaller -Id WatchGuard.WatchGuardAuthenticationClient.)
+id: WatchGuard.WatchGuardAuthenticationClient
+name: WatchGuard Authentication Client
+publisher: WatchGuard Technologies
+description: WatchGuard Single Sign-On authentication client.
+homepage: https://www.watchguard.com
+license: Proprietary
+category: Security
+tags: [sso, firewall]
+
+source:
+  type: winget
+  package: WatchGuard.WatchGuardAuthenticationClient
+
+installer:
+  type: msi
+  signer: WatchGuard
+
+detection:
+  display_name: '^WatchGuard Authentication Client'

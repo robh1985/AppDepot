@@ -117,6 +117,9 @@ function Install-DepotApp {
         -Force is used. Machine-wide installers require an elevated session.
 
         Archive installers (.zip, e.g. Adobe Acrobat) are extracted and their setup file is run.
+        Applications listed as requirements (installer.requires, e.g. the Visual C++ runtime) are
+        installed first when they are missing.
+
         Update patches (.msp) are only applied when the product they update is installed. When an
         application names an update patch (update_with), the newest patch is applied right after a
         new install, so the computer ends up on the latest version.
@@ -193,7 +196,7 @@ function Install-DepotApp {
             return
         }
 
-        $installed = Find-DepotInstalledEntry -Detection $app.detection -Entries @(Get-DepotUninstallEntry)
+        $installed = Find-DepotInstalledEntry -Detection $app.detection -Entries @(Get-DepotUninstallEntry -IncludeAppx:([bool]$app.detection.appx_name))
         if ($info.installer_type -eq 'msp' -and -not $installed) {
             $msg = "$($app.name) is an update patch; the product it updates is not installed on this computer."
             Write-Warning $msg
@@ -207,6 +210,22 @@ function Install-DepotApp {
         }
 
         if (-not $PSCmdlet.ShouldProcess("$($app.name) $($info.version)", 'Install')) { return }
+
+        # Dependencies first (e.g. the Visual C++ runtime for Duo or ODBC Driver 17)
+        foreach ($req in @($app.requires | Where-Object { $_ })) {
+            try { $reqApp = Invoke-DepotApi -Path ("apps/{0}" -f [uri]::EscapeDataString($req)) }
+            catch { Write-Warning "Dependency $req is not in the repository: $($_.Exception.Message)"; continue }
+            $have = Find-DepotInstalledEntry -Detection $reqApp.detection -Entries @(Get-DepotUninstallEntry)
+            if ($have) { Write-Verbose "Dependency $req is installed ($($have.DisplayVersion))."; continue }
+            Write-DepotLog "Installing dependency $req for $($app.id)"
+            $dep = Install-DepotApp -Id $req -NoPatch -KeepInstaller:$KeepInstaller -Confirm:$false
+            $dep
+            if (@($dep | Where-Object { $_.Status -eq 'Failed' }).Count) {
+                $msg = "Dependency $req failed to install; $($app.name) was not installed."
+                Write-Error $msg
+                return New-DepotResult -Id $app.id -Name $app.name -Version $info.version -Action 'Install' -Status 'Failed' -Message $msg
+            }
+        }
 
         if ($info.scope -ne 'user' -and -not (Test-DepotElevated)) {
             Write-Warning "$($app.name) installs for all users and normally requires an elevated (Run as administrator) session."
@@ -407,13 +426,16 @@ function Uninstall-DepotApp {
         try { $app = Invoke-DepotApi -Path ("apps/{0}" -f [uri]::EscapeDataString($Id)) }
         catch { Write-Error -Message $_.Exception.Message -TargetObject $Id; return }
 
-        $entry = Find-DepotInstalledEntry -Detection $app.detection -Entries @(Get-DepotUninstallEntry)
+        $entry = Find-DepotInstalledEntry -Detection $app.detection -Entries @(Get-DepotUninstallEntry -IncludeAppx:([bool]$app.detection.appx_name))
         if (-not $entry) {
             return New-DepotResult -Id $app.id -Name $app.name -Action 'Uninstall' -Status 'NotInstalled' -Message "$($app.name) is not installed."
         }
         $latest = @($app.version_details) | Where-Object { $_.is_latest } | Select-Object -First 1
 
-        if ($entry.WindowsInstaller -and $entry.KeyName -match '^\{[0-9A-Fa-f-]{36}\}$') {
+        if ($entry.KeyName -like 'appx:*' -and $latest -and $latest.uninstall.executable) {
+            $exe = $latest.uninstall.executable; $arguments = [string]$latest.uninstall.arguments   # MSIX/AppX removal
+        }
+        elseif ($entry.WindowsInstaller -and $entry.KeyName -match '^\{[0-9A-Fa-f-]{36}\}$') {
             $exe = 'msiexec.exe'; $arguments = "/x $($entry.KeyName) /qn /norestart"
         }
         elseif ($latest -and $latest.uninstall.executable -and $latest.uninstall.executable -ne 'powershell.exe') {

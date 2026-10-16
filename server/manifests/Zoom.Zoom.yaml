@@ -1,0 +1,26 @@
+# Converted from SyncScripts/Zoom.ps1: the "latest" MSI link redirects to a versioned URL
+# (cdn.zoom.us/prod/<version>/x64/ZoomInstallerFull.msi), read without downloading.
+id: Zoom.Zoom
+name: Zoom Workplace
+publisher: Zoom Communications
+description: Zoom Workplace client (64-bit MSI).
+homepage: https://zoom.us
+license: Proprietary
+category: Communication
+tags: [meetings, video]
+
+source:
+  type: url
+  url: https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64
+  version_from: redirect
+  version_regex: '/prod/([\d.]+)/'
+  filename: ZoomInstallerFull.msi
+
+installer:
+  type: msi
+  signer: Zoom
+  # install_args: '/qn /norestart zNoDesktopShortCut=true'
+
+detection:
+  display_name: '^Zoom'
+  exclude: 'Outlook|Rooms|Plugin|Plug-in|Add-in|VDI|Citrix|VMware|Scheduler|Notes|Clips|Presence|Lync|Skype|Sharing'

@@ -1,0 +1,26 @@
+# Converted from SyncScripts/Python.ps1. Each Python branch installs side by side and gets its
+# own updates, so each is its own application. winget's Python.Python.3.11 package tracks the
+# newest python.org release of the branch that has Windows installers (with SHA-256).
+# Add/remove branches as they reach end of life (python.org/downloads, endoflife.date/python).
+id: Python.Python.3.11
+name: Python 3.11 (64-bit)
+publisher: Python Software Foundation
+description: The Python 3.11 interpreter and standard library, for all users.
+homepage: https://www.python.org
+license: PSF-2.0
+category: Development
+tags: [python, runtime]
+
+source:
+  type: winget
+  package: Python.Python.3.11
+  architecture: x64
+
+installer:
+  type: burn
+  install_args: '/quiet InstallAllUsers=1 PrependPath=0 Include_test=0'
+  uninstall_args: '/uninstall /quiet'
+  signer: 'Python Software Foundation'
+
+detection:
+  display_name: '^Python 3\.11\.\d+ \(64-bit\)$'

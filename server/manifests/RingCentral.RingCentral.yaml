@@ -1,0 +1,24 @@
+# Converted from SyncScripts/RingCentral.ps1: fixed "latest" auto-update MSI with no version
+# API; skipped when ETag/Last-Modified/size are unchanged, otherwise the version is read
+# from the MSI. Signature: RingCentral.
+id: RingCentral.RingCentral
+name: RingCentral
+publisher: RingCentral
+description: RingCentral desktop app (auto-update MSI, 64-bit).
+homepage: https://www.ringcentral.com
+license: Proprietary
+category: Communication
+tags: [phone, meetings]
+
+source:
+  type: url
+  url: https://app.ringcentral.com/download/squirrel-windows/RingCentral-Setup.msi
+  version_from: file
+
+installer:
+  type: msi
+  signer: RingCentral
+
+detection:
+  display_name: '^RingCentral'
+  exclude: 'Meeting|Teams|VDI|Plugin|Phone|Video|Rooms|Outlook|Embeddable|Classic|Service|Add-?in|Chrome|Edge'

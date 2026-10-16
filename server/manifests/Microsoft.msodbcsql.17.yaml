@@ -1,0 +1,32 @@
+# Converted from SyncScripts/ODBCDriver.ps1: the download links (go.microsoft.com/fwlink) change
+# with every release, so they are read from Microsoft's "Download ODBC Driver for SQL Server"
+# page (its source on GitHub, then learn.microsoft.com). The version comes from the MSI; an
+# unchanged link is not downloaded again.
+id: Microsoft.msodbcsql.17
+name: Microsoft ODBC Driver 17 for SQL Server (x64)
+publisher: Microsoft Corporation
+description: ODBC driver for SQL Server and Azure SQL (driver 17, 64-bit).
+homepage: https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server
+license: Proprietary (free)
+category: Runtimes
+tags: [odbc, sql, driver]
+
+sources:
+  - type: web
+    url: https://raw.githubusercontent.com/MicrosoftDocs/sql-docs/live/docs/connect/odbc/download-odbc-driver-for-sql-server.md
+    url_regex: '\[\s*Download Microsoft ODBC Driver 17 for SQL Server \(x64\)\s*\]\((?P<url>https?://go\.microsoft\.com/fwlink/\?linkid=\d+[^)\s]*)\)'
+    version_from: file
+  - type: web
+    url: https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server
+    browser: true
+    url_regex: '(?is)<a\s[^>]*href="(?P<url>https?://go\.microsoft\.com/fwlink/\?linkid=\d+[^"]*)"[^>]*>\s*Download Microsoft ODBC Driver 17 for SQL Server \(x64\)\s*</a>'
+    version_from: file
+
+installer:
+  type: msi
+  install_args: '/qn /norestart IACCEPTMSODBCSQLLICENSETERMS=YES'
+  signer: 'Microsoft Corporation'
+  requires: [Microsoft.VCRedist.2015+.x64]   # Driver 17 needs the Visual C++ runtime
+
+detection:
+  display_name: '^Microsoft ODBC Driver 17 for SQL Server'

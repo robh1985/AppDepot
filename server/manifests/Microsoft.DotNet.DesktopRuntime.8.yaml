@@ -1,0 +1,27 @@
+# Converted from SyncScripts/DotNetDesktopRuntime.ps1: Microsoft's .NET release metadata gives
+# the latest release of the channel with its download URL and SHA-512. Each channel installs
+# side by side, so each is its own application.
+id: Microsoft.DotNet.DesktopRuntime.8
+name: .NET Windows Desktop Runtime 8.0 (x64)
+publisher: Microsoft Corporation
+description: .NET 8.0 (LTS) Windows Desktop Runtime for WinForms/WPF applications, 64-bit.
+homepage: https://dotnet.microsoft.com
+license: MIT
+category: Runtimes
+tags: [dotnet, runtime]
+
+source:
+  type: json
+  url: https://builds.dotnet.microsoft.com/dotnet/release-metadata/8.0/releases.json
+  version_path: 'releases[0].windowsdesktop.version'
+  url_path: 'releases[0].windowsdesktop.files[?name=windowsdesktop-runtime-win-x64.exe][0].url'
+  sha512_path: 'releases[0].windowsdesktop.files[?name=windowsdesktop-runtime-win-x64.exe][0].hash'
+
+installer:
+  type: burn
+  install_args: '/install /quiet /norestart'
+  uninstall_args: '/uninstall /quiet /norestart'
+  signer: 'Microsoft Corporation'
+
+detection:
+  display_name: '^Microsoft Windows Desktop Runtime - 8\.\d+\.\d+ \(x64\)'

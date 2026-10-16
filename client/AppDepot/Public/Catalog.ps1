@@ -206,7 +206,7 @@ function Get-DepotInstalledApp {
     # Patch applications (.msp) are applied through the product that names them in update_with
     $catalog = @($all | Where-Object { -not $_.is_patch })
     if ($Id) { $catalog = $catalog | Where-Object { $_.id -like $Id } }
-    $entries = @(Get-DepotUninstallEntry)
+    $entries = @(Get-DepotUninstallEntry -IncludeAppx:([bool]($catalog | Where-Object { $_.detection.appx_name })))
     foreach ($app in $catalog) {
         $entry = Find-DepotInstalledEntry -Detection $app.detection -Entries $entries
         if (-not $entry) { continue }

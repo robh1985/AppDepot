@@ -52,12 +52,13 @@ def _filename_from_disposition(header: str | None) -> str | None:
     return m.group(1).strip() if m else None
 
 
-def download_file(client: httpx.Client, url: str, dest_dir: Path,
-                  expected_sha256: str | None = None) -> tuple[Path, str, int, str, str | None]:
+def download_file(client: httpx.Client, url: str, dest_dir: Path, expected_sha256: str | None = None,
+                  expected_sha512: str | None = None) -> tuple[Path, str, int, str, str | None]:
     """Stream ``url`` into ``dest_dir``. Returns (path, sha256, size, final_url, cd_filename)."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=dest_dir, suffix=".part")
     sha = hashlib.sha256()
+    sha512 = hashlib.sha512() if expected_sha512 else None
     size = 0
     try:
         with open(fd, "wb") as fh, client.stream("GET", url) as resp:
@@ -65,6 +66,8 @@ def download_file(client: httpx.Client, url: str, dest_dir: Path,
             for chunk in resp.iter_bytes(1024 * 1024):
                 fh.write(chunk)
                 sha.update(chunk)
+                if sha512 is not None:
+                    sha512.update(chunk)
                 size += len(chunk)
             final_url = str(resp.url)
             cd_name = _filename_from_disposition(resp.headers.get("content-disposition"))
@@ -75,10 +78,26 @@ def download_file(client: httpx.Client, url: str, dest_dir: Path,
     if expected_sha256 and digest.lower() != expected_sha256.lower():
         Path(tmp_name).unlink(missing_ok=True)
         raise ValueError(f"SHA-256 mismatch: expected {expected_sha256}, got {digest}")
+    if sha512 is not None and sha512.hexdigest().lower() != expected_sha512.lower():
+        Path(tmp_name).unlink(missing_ok=True)
+        raise ValueError(f"SHA-512 mismatch for {url}")
     if size == 0:
         Path(tmp_name).unlink(missing_ok=True)
         raise ValueError("Downloaded file is empty")
     return Path(tmp_name), digest, size, final_url, cd_name
+
+
+def sniff_extension(path: Path) -> str:
+    """Extension for a download whose name has none, from the file's first bytes."""
+    with open(path, "rb") as fh:
+        head = fh.read(8)
+    if head.startswith(bytes.fromhex("D0CF11E0A1B11AE1")):
+        return ".msi"
+    if head.startswith(b"MZ"):
+        return ".exe"
+    if head.startswith(b"PK"):
+        return ".zip"
+    return ".bin"
 
 
 class Updater:
@@ -233,7 +252,7 @@ class Updater:
                         errors.append(f"{c.url}: {exc}")
                         candidates.remove(c)
                         continue
-                    c.version = c.inspected.msi_version
+                    c.version = self._version_from_file(c)
                     c.state = {**c.state, "version": c.version}
             new_state = {str(c.source_index): c.state for c in candidates if c.state}
             apply_declared_type(candidates, manifest_type)
@@ -322,6 +341,15 @@ class Updater:
         return inspect_file(path, setup_file=extra.get("setup_file"), declared_type=manifest_type,
                             candidate_type=c.installer_type, extract_to=path.parent / "extracted")
 
+    @staticmethod
+    def _version_from_file(c: ReleaseInfo) -> str | None:
+        info: FileInfo = c.inspected
+        rule = c.version_rule or {}
+        if rule.get("text_regex"):
+            # e.g. Chrome: the MSI ProductVersion is not the product version
+            return info.find_text_version(rule["text_regex"]) or rule.get("fallback")
+        return info.version or rule.get("fallback")
+
     def _check_signature(self, app_id: str, c: ReleaseInfo, extra: dict) -> None:
         signer = extra.get("signer")
         if not signer:
@@ -362,10 +390,10 @@ class Updater:
                             source_type="manual")
             c.downloaded = (target, sha.hexdigest(), size, f"{source_label}://{name}", None)
             c.inspected = self._inspect(c, extra, manifest_type)
-            c.version = version or c.inspected.msi_version
+            c.version = version or c.inspected.version
             if not c.version:
                 raise ValueError("A version is required: it could not be read from the file "
-                                 "(only MSI files carry one)")
+                                 "(MSI, MSIX and most EXE files carry one)")
             if c.version in existing and not replace:
                 raise ValueError(f"Version {c.version} is already in the repository (use replace)")
             self._check_signature(app_id, c, extra)
@@ -380,8 +408,10 @@ class Updater:
     def _download(self, client: httpx.Client, app_id: str, c: ReleaseInfo, temp_dirs: list[Path]):
         temp_dir = Path(tempfile.mkdtemp(dir=self.repo.tmp, prefix=safe_segment(app_id) + "-"))
         temp_dirs.append(temp_dir)
-        path, sha, size, final_url, cd_name = download_file(client, c.url, temp_dir, c.sha256)
-        filename = safe_segment(c.filename or cd_name or Path(final_url).name or "installer.exe")
+        path, sha, size, final_url, cd_name = download_file(client, c.url, temp_dir, c.sha256, c.sha512)
+        filename = safe_segment(c.filename or cd_name or Path(final_url.split("?")[0]).name or "installer")
+        if "." not in filename:
+            filename += sniff_extension(path)
         named = temp_dir / filename
         path.rename(named)
         return named, sha, size, final_url, cd_name
@@ -450,6 +480,8 @@ class Updater:
             display_name_regex=display_rx,
             version=row.version,
             key_pattern=detection.get("key_pattern"),
+            exclude=detection.get("exclude"),
+            appx_name=detection.get("appx_name"),
         )
         row.install_executable = cmds.install_executable
         row.install_arguments = cmds.install_arguments
@@ -495,7 +527,9 @@ class Updater:
             self.repo.abs(det_rel).write_text(
                 detection_script(app_name=app.name, version=row.version, display_name_regex=display_rx,
                                  product_code=row.product_code if row.installer_type in MSI_TYPES else None,
-                                 key_pattern=(app.detection or {}).get("key_pattern")),
+                                 key_pattern=(app.detection or {}).get("key_pattern"),
+                                 exclude=(app.detection or {}).get("exclude"),
+                                 appx_name=(app.detection or {}).get("appx_name")),
                 encoding="utf-8-sig")
             self.repo.abs(txt_rel).write_text(deployment_text(
                 app={"name": app.name, "publisher": app.publisher, "description": app.description,
@@ -504,6 +538,7 @@ class Updater:
                          "scope": row.scope, "intunewin_name": out.name, "filename": setup_name,
                          "archive": row.filename if row.setup_path else None,
                          "target_product_codes": (row.msi_info or {}).get("TargetProductCodes"),
+                         "requires": (app.extra or {}).get("requires"),
                          "architecture": row.architecture, "sha256": row.sha256,
                          "source_url": row.source_url, "downloaded_at": row.downloaded_at or utcnow(),
                          "install_command": row.install_command,

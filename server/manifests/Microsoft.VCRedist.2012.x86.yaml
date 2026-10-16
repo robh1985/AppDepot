@@ -1,0 +1,24 @@
+# Converted from SyncScripts/VCRedist.ps1 (2012 Update 4, x86).
+id: Microsoft.VCRedist.2012.x86
+name: Microsoft Visual C++ 2012 Update 4 Redistributable (x86)
+publisher: Microsoft Corporation
+description: Visual C++ runtime libraries required by many applications.
+homepage: https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist
+license: Proprietary (free)
+category: Runtimes
+tags: [vcredist, runtime]
+
+source:
+  type: url
+  url: https://download.microsoft.com/download/1/6/B/16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x86.exe
+  version_from: fixed            # final release; Microsoft no longer updates it
+  version: '11.0.61030.0'
+
+installer:
+  type: burn
+  install_args: '/install /quiet /norestart'
+  uninstall_args: '/uninstall /quiet /norestart'
+  signer: 'Microsoft Corporation'
+
+detection:
+  display_name: '^Microsoft Visual C\+\+ 2012 Redistributable \(x86\)'

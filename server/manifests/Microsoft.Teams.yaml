@@ -1,0 +1,24 @@
+# Converted from SyncScripts/Teams.ps1: Microsoft's fixed link to the new Teams MSIX (x64);
+# skipped when unchanged, otherwise the version is read from AppxManifest.xml. Installed as
+# a provisioned package for all users (Microsoft's teamsbootstrapper.exe does the same).
+id: Microsoft.Teams
+name: Microsoft Teams (work or school)
+publisher: Microsoft Corporation
+description: The new Microsoft Teams client (MSIX, provisioned for all users).
+homepage: https://www.microsoft.com/microsoft-teams
+license: Proprietary
+category: Communication
+tags: [chat, meetings]
+
+source:
+  type: url
+  url: https://go.microsoft.com/fwlink/?linkid=2196106
+  version_from: file
+  filename: MSTeams-x64.msix
+
+installer:
+  type: msix
+  signer: 'Microsoft Corporation'
+
+detection:
+  appx_name: MSTeams                # an MSIX app: detected as a provisioned/installed package

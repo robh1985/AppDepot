@@ -1,3 +1,6 @@
+# Converted from SyncScripts/PuTTY.ps1: the "latest" sha256sums file names the current
+# installers (so it also gives the version) and their SHA-256; files come from the release's
+# permanent folder. Signature: Simon Tatham.
 id: PuTTY.PuTTY
 name: PuTTY
 publisher: Simon Tatham
@@ -7,16 +10,17 @@ license: MIT
 category: Networking
 tags: [ssh, terminal]
 
-# Example of a web page (regex) source
 source:
   type: web
-  url: https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html
-  version_regex: 'latest release \((?P<version>[\d.]+)\)'
+  url: https://the.earth.li/~sgtatham/putty/latest/sha256sums
+  version_regex: 'putty-64bit-(?P<version>[\d.]+)-installer\.msi'
   download_url: https://the.earth.li/~sgtatham/putty/{version}/w64/putty-64bit-{version}-installer.msi
+  sha256_regex: '(?P<sha>[0-9a-fA-F]{64})\s+\S*putty-64bit-{version}-installer\.msi'
 
 installer:
   type: msi
-  architecture: x64
+  signer: 'Simon Tatham'
 
 detection:
-  display_name: '^PuTTY'
+  display_name: '^PuTTY\b'
+  exclude: 'CAC'

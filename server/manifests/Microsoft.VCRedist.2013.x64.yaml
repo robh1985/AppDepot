@@ -1,0 +1,24 @@
+# Converted from SyncScripts/VCRedist.ps1 (2013, x64).
+id: Microsoft.VCRedist.2013.x64
+name: Microsoft Visual C++ 2013 Redistributable (x64)
+publisher: Microsoft Corporation
+description: Visual C++ runtime libraries required by many applications.
+homepage: https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist
+license: Proprietary (free)
+category: Runtimes
+tags: [vcredist, runtime]
+
+source:
+  type: url
+  url: https://aka.ms/highdpimfc2013x64enu
+  version_from: fixed            # final release; Microsoft no longer updates it
+  version: '12.0.40664.0'
+
+installer:
+  type: burn
+  install_args: '/install /quiet /norestart'
+  uninstall_args: '/uninstall /quiet /norestart'
+  signer: 'Microsoft Corporation'
+
+detection:
+  display_name: '^Microsoft Visual C\+\+ 2013 Redistributable \(x64\)'

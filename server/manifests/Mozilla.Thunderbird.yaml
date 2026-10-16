@@ -1,0 +1,23 @@
+# Converted from SyncScripts/Thunderbird.ps1: Mozilla's version feed and release archive.
+id: Mozilla.Thunderbird
+name: Mozilla Thunderbird
+publisher: Mozilla
+description: Free email client (MSI, en-US, 64-bit).
+homepage: https://www.thunderbird.net
+license: MPL-2.0
+category: Communication
+tags: [email]
+
+source:
+  type: json
+  url: https://product-details.mozilla.org/1.0/thunderbird_versions.json
+  version_path: LATEST_THUNDERBIRD_VERSION        # THUNDERBIRD_ESR for the ESR channel
+  download_url: https://archive.mozilla.org/pub/thunderbird/releases/{version}/win64/en-US/Thunderbird%20Setup%20{version}.msi
+
+installer:
+  type: msi
+  signer: Mozilla
+
+detection:
+  display_name: '^Mozilla Thunderbird'
+  exclude: 'Maintenance Service'

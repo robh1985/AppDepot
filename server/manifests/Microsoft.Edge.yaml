@@ -1,0 +1,26 @@
+# Converted from SyncScripts/Edge.ps1: Microsoft's Edge Enterprise release feed (the one the
+# "Edge for Business" download page uses) with download link and SHA-256 per release.
+id: Microsoft.Edge
+name: Microsoft Edge
+publisher: Microsoft Corporation
+description: Microsoft Edge for Business (Stable channel, 64-bit MSI).
+homepage: https://www.microsoft.com/edge/business
+license: Proprietary
+category: Browsers
+tags: [browser]
+schedule: "30 */6 * * *"
+
+source:
+  type: json
+  url: https://edgeupdates.microsoft.com/api/products?view=enterprise
+  version_path: '[?Product=Stable][0].Releases[?Platform=Windows&Architecture=x64][max:ProductVersion].ProductVersion'
+  url_path: '[?Product=Stable][0].Releases[?Platform=Windows&Architecture=x64][max:ProductVersion].Artifacts[?ArtifactName=msi][0].Location'
+  sha256_path: '[?Product=Stable][0].Releases[?Platform=Windows&Architecture=x64][max:ProductVersion].Artifacts[?ArtifactName=msi][0].Hash'
+
+installer:
+  type: msi
+  signer: 'Microsoft Corporation'
+  # install_args: '/qn /norestart DONOTCREATEDESKTOPSHORTCUT=TRUE'   # no desktop shortcut
+
+detection:
+  display_name: '^Microsoft Edge$'

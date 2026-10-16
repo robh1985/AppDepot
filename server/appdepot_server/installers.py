@@ -104,6 +104,8 @@ def build_commands(
     display_name_regex: str | None = None,
     version: str | None = None,
     key_pattern: str | None = None,
+    exclude: str | None = None,
+    appx_name: str | None = None,
 ) -> CommandSet:
     """Build the silent install and uninstall command lines for an installer.
 
@@ -142,11 +144,12 @@ def build_commands(
         un_args = _join("/x", product_code, uninstall_args or defaults["uninstall"])
         un_cmd = _join(un_exe, un_args)
     elif itype in APPX_TYPES:
-        pkg = (display_name_regex or "").strip("^$") or "*"
+        pkg = appx_name or ((display_name_regex or "").strip("^$") or "*")
         un_exe = "powershell.exe"
         un_args = ("-NoProfile -ExecutionPolicy Bypass -Command "
                    f"\"Get-AppxProvisionedPackage -Online | Where-Object DisplayName -like '{pkg}*' | "
-                   "Remove-AppxProvisionedPackage -Online -AllUsers\"")
+                   "Remove-AppxProvisionedPackage -Online -AllUsers; "
+                   f"Get-AppxPackage -AllUsers -Name '{pkg}*' | Remove-AppxPackage -AllUsers\"")
         un_cmd = _join(un_exe, un_args)
     elif display_name_regex:
         # Look up the uninstaller in the registry at run time; works for any
@@ -154,17 +157,20 @@ def build_commands(
         silent = uninstall_args if uninstall_args is not None else defaults["uninstall"]
         un_exe = "powershell.exe"
         un_args = "-NoProfile -ExecutionPolicy Bypass -Command \"" + registry_uninstall_script(
-            display_name_regex, silent, key_pattern) + "\""
+            display_name_regex, silent, key_pattern, exclude) + "\""
         un_cmd = _join(un_exe, un_args)
 
     return CommandSet(inst_exe, inst_args, inst_cmd, un_exe, un_args, un_cmd)
 
 
-def registry_uninstall_script(display_name_regex: str, silent_args: str, key_pattern: str | None = None) -> str:
+def registry_uninstall_script(display_name_regex: str, silent_args: str, key_pattern: str | None = None,
+                              exclude: str | None = None) -> str:
     """Compact PowerShell (no double quotes) that finds and runs an uninstaller."""
     rx = display_name_regex.replace("'", "''")
     sa = silent_args.replace("'", "''")
     key_filter = f" -and $_.PSChildName -match '{key_pattern.replace(chr(39), chr(39) * 2)}'" if key_pattern else ""
+    if exclude:
+        key_filter += f" -and $_.DisplayName -notmatch '{exclude.replace(chr(39), chr(39) * 2)}'"
     return (
         "$k='HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
         "'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*';"

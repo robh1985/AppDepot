@@ -1,0 +1,23 @@
+# Converted from SyncScripts/VCRedist.ps1 (2005 SP1 (MFC security update), x64).
+id: Microsoft.VCRedist.2005.x64
+name: Microsoft Visual C++ 2005 SP1 (MFC security update) Redistributable (x64)
+publisher: Microsoft Corporation
+description: Visual C++ runtime libraries required by many applications.
+homepage: https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist
+license: Proprietary (free)
+category: Runtimes
+tags: [vcredist, runtime]
+
+source:
+  type: url
+  url: https://download.microsoft.com/download/8/B/4/8B42259F-5D70-43F4-AC2E-4B208FD8D66A/vcredist_x64.EXE
+  version_from: fixed            # final release; Microsoft no longer updates it
+  version: '8.0.61001.0'
+
+installer:
+  type: exe
+  install_args: '/q'
+  signer: 'Microsoft Corporation'
+
+detection:
+  display_name: '^Microsoft Visual C\+\+ 2005 Redistributable( \(x64\))?$'

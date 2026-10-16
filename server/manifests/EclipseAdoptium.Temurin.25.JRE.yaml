@@ -1,0 +1,26 @@
+# Converted from SyncScripts/TemurinJRE.ps1: Adoptium's API gives the latest JRE MSI for the
+# Java version with its SHA-256. Java versions install side by side: one application each.
+id: EclipseAdoptium.Temurin.25.JRE
+name: Eclipse Temurin JRE 25 (x64)
+publisher: Eclipse Adoptium
+description: Free, open-source Java 25 runtime (Eclipse Temurin, HotSpot), 64-bit.
+homepage: https://adoptium.net
+license: GPL-2.0 with Classpath Exception
+category: Runtimes
+tags: [java, jre, runtime]
+
+source:
+  type: json
+  url: https://api.adoptium.net/v3/assets/latest/25/hotspot?image_type=jre&os=windows&architecture=x64
+  version_path: '[0].version.semver'
+  url_path: '[0].binary.installer.link'
+  sha256_path: '[0].binary.installer.checksum'
+
+installer:
+  type: msi
+  signer: 'Eclipse'
+  # install_args: '/qn /norestart ADDLOCAL=FeatureMain,FeatureEnvironment,FeatureJarFileRunWith,FeatureJavaHome'
+
+detection:
+  display_name: '^Eclipse Temurin JRE with Hotspot 25\.'
+  publisher: 'Adoptium|Eclipse'

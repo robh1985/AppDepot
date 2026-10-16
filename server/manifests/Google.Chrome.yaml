@@ -1,3 +1,7 @@
+# Converted from SyncScripts/Chrome.ps1: Google's fixed "latest" enterprise MSI (skipped when
+# ETag/Last-Modified/size are unchanged). The MSI's ProductVersion is NOT the Chrome version,
+# so the real version is read from the MSI's texts (version_regex), falling back to Google's
+# version history API (newest Stable release fully rolled out on win64).
 id: Google.Chrome
 name: Google Chrome
 publisher: Google LLC
@@ -6,19 +10,20 @@ homepage: https://chromeenterprise.google
 license: Proprietary
 category: Browsers
 tags: [browser]
-
-# Browsers update often: check every 6 hours instead of the global schedule.
 schedule: "15 */6 * * *"
 
 source:
-  type: winget
-  package: Google.Chrome
-  architecture: x64
-  scope: machine
+  type: url
+  url: https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi
+  version_from: file
+  version_regex: '(?<![\d.])(\d{2,3}\.\d+\.\d{3,5}\.\d+)'
+  version_api:
+    url: https://versionhistory.googleapis.com/v1/chrome/platforms/win64/channels/stable/versions/all/releases?filter=endtime=none
+    path: 'releases[?fraction=1][max:version].version'
 
 installer:
-  # Chrome updates itself in place; no need to remove the old version first.
-  upgrade_behavior: install
+  type: msi
+  signer: Google
 
 detection:
   display_name: '^Google Chrome$'

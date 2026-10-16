@@ -1,0 +1,25 @@
+# Converted from SyncScripts/VMwareTools.ps1: the public VMware Tools repository's "latest"
+# folder lists the installer (VMware-tools-<version>-<build>-x64.exe). The repository has no
+# checksums, so the Authenticode signature is the check.
+id: VMware.VMwareTools
+name: VMware Tools
+publisher: Broadcom
+description: VMware Tools for Windows virtual machines (64-bit).
+homepage: https://packages-prod.broadcom.com/tools/releases/
+license: Proprietary
+category: Utilities
+tags: [vmware, drivers]
+
+source:
+  type: web
+  url: https://packages-prod.broadcom.com/tools/releases/latest/windows/x64/
+  version_regex: 'VMware-tools-(?P<version>\d+\.\d+\.\d+-\d+)-x64\.exe'
+  url_regex: 'href="(?P<url>[^"]*VMware-tools-[\d.]+-\d+-x64\.exe)"'
+
+installer:
+  type: exe
+  install_args: '/S /v"/qn REBOOT=R ADDLOCAL=ALL"'
+  signer: 'Broadcom|VMware'
+
+detection:
+  display_name: '^VMware Tools$'

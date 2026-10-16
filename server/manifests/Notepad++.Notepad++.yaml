@@ -1,3 +1,4 @@
+# Converted from SyncScripts/NotepadPlusPlus.ps1: GitHub releases, MSI, SHA-256 + signature.
 id: Notepad++.Notepad++
 name: Notepad++
 publisher: Notepad++ Team
@@ -7,10 +8,16 @@ license: GPL-3.0
 category: Development
 tags: [editor, text]
 
-source:
-  type: winget
-  package: Notepad++.Notepad++
-  architecture: x64
+sources:
+  - type: github
+    repo: notepad-plus-plus/notepad-plus-plus
+    asset_pattern: '^npp\.[\d.]+\.Installer\.x64\.msi$'
+    version_regex: '(\d+(?:\.\d+)+)'
+  - type: winget                    # fallback (NSIS installer)
+    package: Notepad++.Notepad++
+
+installer:
+  signer: 'Notepad\+\+|Don HO'
 
 detection:
   display_name: '^Notepad\+\+'
