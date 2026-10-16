@@ -5,13 +5,15 @@
     ./client/build/New-ReferenceDocs.ps1
 #>
 param(
-    [string] $ModulePath = (Join-Path $PSScriptRoot '..\AppDepot\AppDepot.psd1'),
-    [string] $OutFile = (Join-Path $PSScriptRoot '..\..\docs\powershell-reference.md')
+    [string] $ModulePath = [IO.Path]::Combine($PSScriptRoot, '..', 'AppDepot', 'AppDepot.psd1'),
+    [string] $OutFile = [IO.Path]::Combine($PSScriptRoot, '..', '..', 'docs', 'powershell-reference.md')
 )
-Import-Module $ModulePath -Force
+$ErrorActionPreference = 'Stop'
+Import-Module (Resolve-Path -LiteralPath $ModulePath).Path -Force
 $order = 'Get-DepotApp','Find-DepotApp','Get-DepotAppVersion','Get-DepotInstalledApp','Get-DepotUpdate',
          'Install-DepotApp','Update-DepotApp','Uninstall-DepotApp','Save-DepotInstaller',
          'Get-DepotServerStatus','Get-DepotEvent','Invoke-DepotServerCheck','Set-DepotSchedule',
+         'Find-DepotWingetPackage','Test-DepotAppSource','New-DepotApp','Remove-DepotApp','Get-DepotManifestTemplate',
          'Get-DepotConfig','Set-DepotConfig','Test-DepotConnection','Compare-DepotVersion','Show-DepotGui'
 $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine('# PowerShell cmdlet reference')
@@ -62,4 +64,4 @@ foreach ($n in $order) {
     $out = @($h.returnValues.returnValue | ForEach-Object { $_.type.name } | Where-Object { $_ })
     if ($out) { [void]$sb.AppendLine("**Output:** ``$($out -join ', ')``"); [void]$sb.AppendLine() }
 }
-Set-Content -LiteralPath $OutFile -Value $sb.ToString() -Encoding UTF8
+Set-Content -LiteralPath ([IO.Path]::GetFullPath($OutFile)) -Value $sb.ToString() -Encoding UTF8

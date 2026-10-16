@@ -13,6 +13,14 @@
     appdepot-server events [--app APP_ID] [--limit 50]
     appdepot-server validate FILE ...          validate manifest files
     appdepot-server verify-package FILE        verify an .intunewin file
+
+  Adding applications:
+    appdepot-server app search QUERY            search the winget catalog
+    appdepot-server app add WINGET_ID [--category C] [--arch x64] [--check] [--yes]
+    appdepot-server app add --file MANIFEST.yaml [--check]
+    appdepot-server app test (WINGET_ID | --file F | --id APP_ID)   preview, nothing saved
+    appdepot-server app template TYPE           print a manifest template
+    appdepot-server app remove APP_ID [--delete-files] [--yes]
 """
 
 from __future__ import annotations
@@ -88,7 +96,36 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("verify-package", help="Verify the encryption/integrity of an .intunewin file")
     sp.add_argument("file")
 
+    sp = sub.add_parser("app", help="Add, test and remove applications")
+    asub = sp.add_subparsers(dest="action", required=True)
+    a = asub.add_parser("search", help="Search the winget catalog")
+    a.add_argument("query", nargs="+")
+    a.add_argument("--limit", type=int, default=25)
+    a = asub.add_parser("add", help="Add an application from winget or a manifest file")
+    a.add_argument("winget_id", nargs="?")
+    a.add_argument("--file", help="Manifest YAML file")
+    a.add_argument("--category")
+    a.add_argument("--arch", default="x64", choices=["x64", "x86", "arm64"])
+    a.add_argument("--check", action="store_true", help="Download the application now")
+    a.add_argument("--replace", action="store_true", help="Overwrite an existing application")
+    a.add_argument("--yes", "-y", action="store_true", help="Do not ask for confirmation")
+    a = asub.add_parser("test", help="Preview what would be downloaded (nothing is saved)")
+    a.add_argument("winget_id", nargs="?")
+    a.add_argument("--file")
+    a.add_argument("--id", dest="app_id", help="An application already in the repository")
+    a = asub.add_parser("template", help="Print a manifest template")
+    a.add_argument("type", choices=["winget", "github", "web", "json", "url", "multi"])
+    a = asub.add_parser("remove", help="Remove an application")
+    a.add_argument("app_id")
+    a.add_argument("--delete-files", action="store_true")
+    a.add_argument("--yes", "-y", action="store_true")
+
     args = p.parse_args(argv)
+
+    if args.cmd == "app" and args.action == "template":
+        from .onboarding import TEMPLATES
+        print(TEMPLATES[args.type], end="")
+        return 0
 
     if args.cmd == "validate":
         from .manifest import load_manifest_file
@@ -187,6 +224,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{aid}: purged {', '.join(purged)}")
         return 0
 
+    if args.cmd == "app":
+        return _app_command(ctx, args)
+
     if args.cmd == "events":
         with ctx.db.session() as s:
             q = select(Event).order_by(Event.id.desc()).limit(args.limit)
@@ -198,6 +238,109 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     return 1
+
+
+def _print_preview(pv: dict) -> None:
+    print(f"\n{pv['id']}: latest version {pv['latest_version'] or '?'}")
+    print(f"  {pv['note']}")
+    print(f"  MSI available: {'yes' if pv['msi_available'] else 'no'}")
+    if pv["candidates"]:
+        print(_table([[("*" if i == 0 else ""), c["version"] or "?", c["type"], f"{c['source']} #{c['source_index']}",
+                       (c["filename"] or "")[:60]] for i, c in enumerate(pv["candidates"])],
+                     ["", "Version", "Type", "Source", "File"]))
+    for e in pv["errors"]:
+        print(f"  ! {e}")
+
+
+def _confirm(question: str, assume_yes: bool) -> bool:
+    if assume_yes:
+        return True
+    return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
+
+
+def _app_command(ctx, args) -> int:
+    import yaml
+
+    from .manifest import ManifestError, export_manifest, load_manifest_file
+    from .onboarding import (
+        OnboardingError,
+        WingetCatalog,
+        manifest_from_winget,
+        preview,
+        remove_application,
+        save_application,
+    )
+
+    try:
+        if args.action == "search":
+            results = WingetCatalog(ctx.config).search(" ".join(args.query), args.limit)
+            with ctx.db.session() as s:
+                known = {a.lower() for a in s.scalars(select(Application.app_id))}
+            print(_table([[r["id"], r.get("name") or "", r.get("version") or "",
+                           "yes" if r["id"].lower() in known else ""] for r in results],
+                         ["Winget id", "Name", "Version", "In repository"]))
+            print("\nAdd one with: appdepot-server app add <Winget id>")
+            return 0
+
+        if args.action in ("add", "test"):
+            info = None
+            if getattr(args, "app_id", None):
+                with ctx.db.session() as s:
+                    app = ctx.db.get_app(s, args.app_id)
+                    if app is None:
+                        print(f"Unknown application {args.app_id}", file=sys.stderr)
+                        return 1
+                    manifest = export_manifest(app)
+            elif args.file:
+                manifest = load_manifest_file(Path(args.file))
+            elif args.winget_id:
+                manifest, info = manifest_from_winget(ctx.config, args.winget_id,
+                                                      getattr(args, "category", None),
+                                                      getattr(args, "arch", "x64"))
+            else:
+                print("Give a winget id, --file or --id", file=sys.stderr)
+                return 2
+            if args.action == "add" and args.category:
+                manifest["category"] = args.category
+            pv = preview(ctx.config, manifest)
+            if info:
+                print(f"winget installers for {manifest['source']['architecture']}: "
+                      f"{', '.join(info['installer_types']) or 'none'}")
+                if info["msi_other_architecture"]:
+                    print("  note: winget has an MSI only for another architecture")
+            _print_preview(pv)
+            if args.action == "test":
+                print("\nManifest:\n" + yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True))
+                return 0 if pv["ok"] else 1
+            print("\n" + yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True))
+            if not pv["ok"]:
+                print("Warning: no installer could be found with this manifest.")
+            if not _confirm(f"Add {manifest['id']} to the repository?", args.yes):
+                return 1
+            result = save_application(ctx.config, ctx.db, manifest, replace=args.replace,
+                                      added_by="appdepot-server app add")
+            ctx.scheduler.bump_revision()
+            print(f"Added {result['id']} -> {result['manifest_path']}")
+            if args.check:
+                r = ctx.updater.check_app(result["id"])
+                print(f"{r.status}: {r.version or ''} {r.message}")
+                return 1 if r.status == "failed" else 0
+            print(f"Download it now with: appdepot-server check {result['id']}")
+            return 0
+
+        if args.action == "remove":
+            if not _confirm(f"Remove {args.app_id}{' and delete its files' if args.delete_files else ''}?",
+                            args.yes):
+                return 1
+            result = remove_application(ctx.db, ctx.repo, args.app_id, args.delete_files)
+            ctx.scheduler.bump_revision()
+            print(f"Removed {result['id']}" + (f"; manifest retired to {result['manifest_retired_to']}"
+                                              if result["manifest_retired_to"] else ""))
+            return 0
+    except (OnboardingError, ManifestError, KeyError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

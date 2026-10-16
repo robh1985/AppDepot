@@ -23,7 +23,9 @@ from .intune_info import deployment_text, detection_script
 from .intunewin import create_intunewin_native, create_intunewin_official
 from .msi import msi_summary
 from .repository import Repository, safe_segment
-from .sources import ReleaseInfo, SourceContext, get_source, make_client
+from .selection import apply_declared_type, candidate_type, describe, gather, rank, selection_note, type_rank
+from .sources import ReleaseInfo, make_client
+from .sources.base import type_from_filename
 from .versioning import sort_versions, version_key
 
 log = logging.getLogger("appdepot.updater")
@@ -195,59 +197,91 @@ class Updater:
             app = self.db.get_app(s, app_id)
             if app is None:
                 raise KeyError(f"Unknown application '{app_id}'")
-            source_type, source_cfg = app.source_type, dict(app.source_config or {})
+            sources = app.source_list
             source_state = dict(app.source_state or {})
-            existing = {v.version for v in app.versions if v.status == "available"}
+            existing = {v.version: v.installer_type for v in app.versions if v.status == "available"}
             manifest_type = app.installer_type
+            preferred = list(app.preferred_types or self.config.preferred_types)
 
-        self.db.log_event("check", "Checking for updates", app_id=app_id)
+        self.db.log_event("check", f"Checking {len(sources)} source(s) for updates", app_id=app_id)
         log.info("Checking %s", app_id)
         client = make_client(self.config.section("sources"))
-        temp_dir: Path | None = None
+        temp_dirs: list[Path] = []
         try:
-            source = get_source(source_type, source_cfg)
-            ctx = SourceContext(client=client, github_token=self.config.section("sources").get("github_token"),
-                                state=source_state)
-            release = source.resolve(ctx)
+            candidates, errors = gather(sources, client, self.config.section("sources").get("github_token"),
+                                        source_state)
+            for err in errors:
+                self.db.log_event("check", f"Source failed: {err}", app_id=app_id, level="error")
+            if not candidates:
+                raise LookupError("No source returned an installer: " + "; ".join(errors))
 
-            if not force and (release.unchanged or (release.version and release.version in existing)):
-                self._set_status(app_id, "up_to_date", state=release.state)
-                self.db.log_event("check", f"Up to date ({release.version or 'unchanged download'})",
-                                  app_id=app_id, version=release.version)
-                return CheckResult(app_id, "up_to_date", release.version, "Already in repository")
+            # Sources that only reveal the version inside the file (url + version_from: msi)
+            for c in candidates:
+                if c.version is None:
+                    c.downloaded = self._download(client, app_id, c, temp_dirs)
+                    c.version = (self._msi_info(c.downloaded[0]) or {}).get("ProductVersion")
+                    c.state = {**c.state, "version": c.version}
+            new_state = {str(c.source_index): c.state for c in candidates if c.state}
+            apply_declared_type(candidates, manifest_type)
 
-            self.db.log_event("download", f"Downloading {release.url}", app_id=app_id, version=release.version)
-            temp_dir = Path(tempfile.mkdtemp(dir=self.repo.tmp, prefix=safe_segment(app_id) + "-"))
-            temp_file, sha, size, final_url, cd_name = download_file(client, release.url, temp_dir, release.sha256)
-            filename = safe_segment(release.filename or cd_name or Path(final_url).name or "installer.exe")
-            named = temp_dir / filename
-            temp_file.rename(named)
-            temp_file = named
+            ranked = rank(candidates, preferred)
+            if not ranked:
+                raise ValueError("No source provided a version and none could be read from the files")
+            best = ranked[0]
+            considered = [describe(c) for c in ranked[:12]]
 
-            itype = manifest_type or release.installer_type or guess_installer_type(temp_file)
-            msi_info = None
-            if itype in MSI_TYPES or temp_file.suffix.lower() == ".msi":
+            replace_type = None
+            if best.version in existing and not force:
+                stored = existing[best.version]
+                if type_rank(candidate_type(best), preferred) < type_rank(stored or "exe", preferred):
+                    replace_type = stored   # e.g. an MSI appeared for a version stored as EXE
+                else:
+                    self._set_status(app_id, "up_to_date", state=new_state)
+                    self.db.log_event("check", f"Up to date ({best.version}, {stored})", app_id=app_id,
+                                      version=best.version, details={"considered": considered})
+                    return CheckResult(app_id, "up_to_date", best.version, "Already in repository")
+
+            chosen, failures = None, []
+            for c in ranked:
+                if c.version in existing and not force and not (replace_type and c.version == best.version
+                        and type_rank(candidate_type(c), preferred) < type_rank(replace_type, preferred)):
+                    break   # everything from here on is already stored or worse
                 try:
-                    msi_info = msi_summary(temp_file)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("Could not read MSI properties of %s: %s", filename, exc)
+                    if c.downloaded is None:
+                        self.db.log_event("download", f"Downloading {c.url}", app_id=app_id, version=c.version)
+                        c.downloaded = self._download(client, app_id, c, temp_dirs)
+                    chosen = c
+                    break
+                except (httpx.HTTPError, ValueError, OSError) as exc:
+                    failures.append(f"{candidate_type(c)} from {c.source_type}: {exc}")
+                    self.db.log_event("download", f"Download failed, trying next candidate: {exc}",
+                                      app_id=app_id, version=c.version, level="error")
+            if chosen is None:
+                if failures:
+                    raise LookupError("All downloads failed: " + "; ".join(failures))
+                self._set_status(app_id, "up_to_date", state=new_state)
+                return CheckResult(app_id, "up_to_date", best.version, "Already in repository")
 
-            version = release.version or (msi_info or {}).get("ProductVersion")
-            if not version:
-                raise ValueError("The source did not provide a version and none could be read from the file")
+            note = selection_note(chosen, candidates, len(sources))
+            self.db.log_event("check", note, app_id=app_id, version=chosen.version,
+                              level="info", details={"selected": describe(chosen), "considered": considered,
+                                                     "source_errors": errors, "download_failures": failures})
 
-            if version in existing and not force:
-                self._set_status(app_id, "up_to_date", state=release.state)
-                self.db.log_event("check", f"Up to date ({version})", app_id=app_id, version=version)
-                return CheckResult(app_id, "up_to_date", version, "Already in repository")
-            if version in existing and force:
+            temp_file, sha, size, final_url, cd_name = chosen.downloaded
+            itype = self._installer_type(chosen, manifest_type, temp_file)
+            msi_info = self._msi_info(temp_file) if itype in MSI_TYPES or temp_file.suffix.lower() == ".msi" else None
+            version = chosen.version
+            if version in existing:
                 self.delete_version(app_id, version)
+                if replace_type:
+                    self.db.log_event("update", f"Replacing the stored {replace_type} installer of {version} "
+                                      f"with the preferred {itype}", app_id=app_id, version=version)
 
-            result = self._store(app_id, version, temp_file, filename, sha, size, release, itype,
+            result = self._store(app_id, version, temp_file, temp_file.name, sha, size, chosen, itype,
                                  msi_info, final_url)
-            self._set_status(app_id, "updated", state=release.state)
+            self._set_status(app_id, "updated", state=new_state)
             purged = self.apply_retention(app_id)
-            msg = f"Downloaded version {version}"
+            msg = f"Downloaded version {version} ({itype}). {note}"
             if purged:
                 msg += f"; purged {', '.join(purged)}"
             return CheckResult(app_id, "updated", version, msg + result)
@@ -258,8 +292,33 @@ class Updater:
             return CheckResult(app_id, "failed", None, str(exc))
         finally:
             client.close()
-            if temp_dir is not None:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            for d in temp_dirs:
+                shutil.rmtree(d, ignore_errors=True)
+
+    def _download(self, client: httpx.Client, app_id: str, c: ReleaseInfo, temp_dirs: list[Path]):
+        temp_dir = Path(tempfile.mkdtemp(dir=self.repo.tmp, prefix=safe_segment(app_id) + "-"))
+        temp_dirs.append(temp_dir)
+        path, sha, size, final_url, cd_name = download_file(client, c.url, temp_dir, c.sha256)
+        filename = safe_segment(c.filename or cd_name or Path(final_url).name or "installer.exe")
+        named = temp_dir / filename
+        path.rename(named)
+        return named, sha, size, final_url, cd_name
+
+    @staticmethod
+    def _installer_type(c: ReleaseInfo, manifest_type: str | None, path: Path) -> str:
+        """The candidate's specific type wins; generic 'exe' defers to the manifest, then the file."""
+        known = c.installer_type or type_from_filename(path.name)
+        if known and known != "exe":
+            return known
+        return manifest_type or guess_installer_type(path)
+
+    @staticmethod
+    def _msi_info(path: Path) -> dict | None:
+        try:
+            return msi_summary(path)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not read MSI properties of %s: %s", path.name, exc)
+            return None
 
     def _store(self, app_id: str, version: str, temp_file: Path, filename: str, sha: str, size: int,
                release: ReleaseInfo, itype: str, msi_info: dict | None, final_url: str) -> str:
@@ -277,6 +336,7 @@ class Updater:
                 sha256=sha,
                 size_bytes=size,
                 source_url=final_url,
+                source_type=release.source_type or None,
                 release_notes_url=release.release_notes_url,
                 installer_type=itype,
                 architecture=release.architecture or app.architecture,

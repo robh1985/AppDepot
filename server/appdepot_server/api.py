@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hmac
 import html
+
+import yaml
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
@@ -20,7 +23,16 @@ from sqlalchemy import or_, select
 from . import __version__
 from .context import AppContext
 from .db import Application, AppVersion, Event
-from .manifest import ManifestError, export_manifest, upsert_manifest
+from .manifest import ManifestError, export_manifest
+from .onboarding import (
+    TEMPLATES,
+    OnboardingError,
+    WingetCatalog,
+    manifest_from_winget,
+    preview,
+    remove_application,
+    save_application,
+)
 from .versioning import is_newer, sort_versions
 
 
@@ -258,29 +270,108 @@ def create_app(ctx: AppContext, start_scheduler: bool = True) -> FastAPI:
     # ---------------------------------------------------------------- admin
     admin = [Depends(require_admin)]
 
-    @api.post("/api/v1/apps", tags=["admin"], dependencies=admin, status_code=201)
-    def put_app(manifest: dict[str, Any]):
-        """Add or update an application from a manifest (same schema as the YAML files)."""
+    def _save(manifest: dict[str, Any], replace: bool, check: bool) -> dict[str, Any]:
         try:
-            app_id, changed = upsert_manifest(ctx.db, manifest)
+            result = save_application(ctx.config, ctx.db, manifest, replace=replace, added_by="the API")
+        except ManifestError as exc:
+            status = 409 if "already exists" in str(exc) else 422
+            raise HTTPException(status, str(exc)) from None
+        ctx.scheduler.bump_revision()
+        ctx.scheduler.reload()
+        if check:
+            ctx.scheduler.run_in_background([result["id"]], reason="new application")
+            result["check_queued"] = True
+        return result
+
+    @api.post("/api/v1/apps", tags=["admin"], dependencies=admin, status_code=201)
+    def add_app(manifest: dict[str, Any], replace: bool = False, check: bool = False):
+        """Add an application from a manifest (JSON, same schema as the YAML files).
+
+        The manifest is written to the manifests folder and loaded into the database.
+        `replace=true` overwrites an existing application; `check=true` downloads it now.
+        """
+        return _save(manifest, replace, check)
+
+    @api.post("/api/v1/apps/yaml", tags=["admin"], dependencies=admin, status_code=201)
+    async def add_app_yaml(request: Request, replace: bool = False, check: bool = False):
+        """Add an application from a YAML manifest sent as the raw request body."""
+        try:
+            manifest = yaml.safe_load((await request.body()).decode("utf-8"))
+        except (yaml.YAMLError, UnicodeDecodeError) as exc:
+            raise HTTPException(422, f"Invalid YAML: {exc}") from None
+        if not isinstance(manifest, dict):
+            raise HTTPException(422, "The YAML document must be a mapping")
+        return await run_in_threadpool(_save, manifest, replace, check)
+
+    @api.post("/api/v1/apps/preview", tags=["admin"], dependencies=admin)
+    def preview_manifest(manifest: dict[str, Any]):
+        """Resolve a manifest's sources without saving or downloading: what would be installed?"""
+        try:
+            return preview(ctx.config, manifest)
         except ManifestError as exc:
             raise HTTPException(422, str(exc)) from None
-        ctx.scheduler.reload()
-        return {"id": app_id, "changed": changed}
+
+    @api.post("/api/v1/apps/preview/yaml", tags=["admin"], dependencies=admin)
+    async def preview_manifest_yaml(request: Request):
+        """Like /apps/preview, for a YAML manifest sent as the raw request body."""
+        try:
+            manifest = yaml.safe_load((await request.body()).decode("utf-8"))
+        except (yaml.YAMLError, UnicodeDecodeError) as exc:
+            raise HTTPException(422, f"Invalid YAML: {exc}") from None
+        if not isinstance(manifest, dict):
+            raise HTTPException(422, "The YAML document must be a mapping")
+        return await run_in_threadpool(preview_manifest, manifest)
+
+    @api.post("/api/v1/apps/{app_id}/preview", tags=["admin"], dependencies=admin)
+    def preview_existing(app_id: str):
+        with ctx.db.session() as s:
+            manifest = export_manifest(get_app_or_404(s, app_id))
+        return preview(ctx.config, manifest)
+
+    @api.get("/api/v1/winget/search", tags=["admin"], dependencies=admin)
+    def winget_search(q: str = Query(..., min_length=2), limit: int = Query(25, le=100)):
+        """Search the winget catalog. Results include whether the app is already in the repository."""
+        try:
+            results = WingetCatalog(ctx.config).search(q, limit)
+        except OnboardingError as exc:
+            raise HTTPException(503, str(exc)) from None
+        with ctx.db.session() as s:
+            known = {a.lower() for a in s.scalars(select(Application.app_id))}
+        for r in results:
+            r["in_repository"] = r["id"].lower() in known
+        return results
+
+    @api.get("/api/v1/winget/packages/{package_id}", tags=["admin"], dependencies=admin)
+    def winget_manifest(package_id: str, category: str | None = None, architecture: str = "x64",
+                        include_preview: bool = True):
+        """Generate an AppDepot manifest for a winget package (not saved), plus a preview."""
+        try:
+            manifest, info = manifest_from_winget(ctx.config, package_id, category, architecture)
+        except OnboardingError as exc:
+            raise HTTPException(404, str(exc)) from None
+        result = {"manifest": manifest, "info": info}
+        if include_preview:
+            result["preview"] = preview(ctx.config, manifest)
+        with ctx.db.session() as s:
+            result["in_repository"] = ctx.db.get_app(s, package_id) is not None
+        return result
+
+    @api.get("/api/v1/templates/{source_type}", tags=["admin"], dependencies=admin)
+    def manifest_template(source_type: str):
+        if source_type not in TEMPLATES:
+            raise HTTPException(404, f"Templates: {', '.join(TEMPLATES)}")
+        return {"type": source_type, "yaml": TEMPLATES[source_type]}
 
     @api.delete("/api/v1/apps/{app_id}", tags=["admin"], dependencies=admin)
     def delete_app(app_id: str, delete_files: bool = False):
-        with ctx.db.session() as s:
-            app = get_app_or_404(s, app_id)
-            real_id = app.app_id
-            versions = [v.version for v in app.versions]
-            s.delete(app)
-        if delete_files:
-            for v in versions:
-                ctx.repo.delete_version(real_id, v)
-        ctx.db.log_event("manifest", "Application removed", app_id=real_id)
+        """Remove an application. Its manifest file is renamed to *.removed so it is not re-added."""
+        try:
+            result = remove_application(ctx.db, ctx.repo, app_id, delete_files)
+        except KeyError:
+            raise HTTPException(404, f"Application '{app_id}' not found") from None
+        ctx.scheduler.bump_revision()
         ctx.scheduler.reload()
-        return {"deleted": real_id}
+        return {"deleted": result["id"], **result}
 
     @api.post("/api/v1/apps/{app_id}/check", tags=["admin"], dependencies=admin)
     def check_app(app_id: str, force: bool = False, wait: bool = False):

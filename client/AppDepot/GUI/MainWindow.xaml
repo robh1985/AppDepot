@@ -160,6 +160,7 @@
               </Border>
             </StackPanel>
           </RadioButton>
+          <RadioButton x:Name="NavAdd" Style="{StaticResource NavButton}" Tag="&#xE710;" GroupName="Nav" Content="Add apps"/>
           <RadioButton x:Name="NavActivity" Style="{StaticResource NavButton}" Tag="&#xE81C;" GroupName="Nav" Content="Activity"/>
           <RadioButton x:Name="NavSettings" Style="{StaticResource NavButton}" Tag="&#xE713;" GroupName="Nav" Content="Settings"/>
         </StackPanel>
@@ -343,6 +344,94 @@
         </Border>
       </Grid>
 
+      <!-- Add applications view -->
+      <Grid x:Name="AddView" Grid.Row="2" Margin="28,0,28,0" Visibility="Collapsed">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="400"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Border x:Name="AddKeyBanner" Grid.ColumnSpan="2" Margin="0,0,0,12" Padding="14,10" CornerRadius="8"
+                Background="#EFF6FF" BorderBrush="#93C5FD" BorderThickness="1" Visibility="Collapsed">
+          <DockPanel>
+            <Button x:Name="AddOpenSettings" DockPanel.Dock="Right" Style="{StaticResource SecondaryButton}" Padding="12,4" Content="Open Settings"/>
+            <TextBlock VerticalAlignment="Center" Foreground="#1E3A8A" TextWrapping="Wrap"
+                       Text="Adding applications requires the server API key. Enter it under Settings."/>
+          </DockPanel>
+        </Border>
+
+        <Border Grid.Row="1" Style="{StaticResource Card}">
+          <DockPanel>
+            <DockPanel DockPanel.Dock="Top" Margin="16,16,16,8">
+              <Button x:Name="WingetSearchButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                  <TextBlock Text="Search winget"/>
+                </StackPanel>
+              </Button>
+              <TextBox x:Name="WingetQuery" Height="36" VerticalContentAlignment="Center" Padding="8,0"/>
+            </DockPanel>
+            <TextBlock x:Name="WingetHint" DockPanel.Dock="Top" Margin="16,0,16,8" Foreground="{StaticResource Muted}" TextWrapping="Wrap"
+                       Text="Search the winget catalog by name or id (for example: notepad, Mozilla.Firefox) and select a result to preview it."/>
+            <ListView x:Name="WingetResults" BorderThickness="0" Margin="8,0,8,8">
+              <ListView.View>
+                <GridView>
+                  <GridViewColumn Header="Name" Width="230" DisplayMemberBinding="{Binding Name}"/>
+                  <GridViewColumn Header="Winget id" Width="260" DisplayMemberBinding="{Binding Id}"/>
+                  <GridViewColumn Header="Version" Width="120" DisplayMemberBinding="{Binding Version}"/>
+                  <GridViewColumn Header="In repository" Width="100" DisplayMemberBinding="{Binding InRepositoryText}"/>
+                </GridView>
+              </ListView.View>
+            </ListView>
+          </DockPanel>
+        </Border>
+
+        <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Margin="16,0,0,0">
+          <Grid>
+            <TextBlock x:Name="AddNoSelection" Text="Select a search result to preview it" Foreground="{StaticResource Muted}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" Margin="20"/>
+            <ScrollViewer x:Name="AddPane" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+              <StackPanel Margin="22">
+                <TextBlock x:Name="AddName" FontSize="19" FontWeight="SemiBold" Foreground="{StaticResource Ink}" TextWrapping="Wrap"/>
+                <TextBlock x:Name="AddPublisher" Foreground="{StaticResource Muted}"/>
+                <TextBlock x:Name="AddDescription" TextWrapping="Wrap" Foreground="#374151" Margin="0,12,0,0"/>
+                <Border x:Name="AddMsiBadge" CornerRadius="6" Padding="10,6" Margin="0,14,0,0" Background="#F3F4F6">
+                  <TextBlock x:Name="AddMsiText" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                </Border>
+                <Grid Margin="0,14,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                  </Grid.RowDefinitions>
+                  <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Winget id"/>
+                  <TextBox Grid.Row="0" Grid.Column="1" x:Name="AddId" IsReadOnly="True" BorderThickness="0" Background="Transparent" Margin="0,4"/>
+                  <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Latest version"/>
+                  <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource FieldValue}" x:Name="AddVersion" FontWeight="SemiBold"/>
+                  <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Installer"/>
+                  <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource FieldValue}" x:Name="AddInstaller"/>
+                  <TextBlock Grid.Row="3" Style="{StaticResource FieldLabel}" Text="All installers"/>
+                  <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource FieldValue}" x:Name="AddAllInstallers"/>
+                  <TextBlock Grid.Row="4" Style="{StaticResource FieldLabel}" Text="File"/>
+                  <TextBlock Grid.Row="4" Grid.Column="1" Style="{StaticResource FieldValue}" x:Name="AddFile"/>
+                </Grid>
+                <TextBlock Text="Category" Foreground="{StaticResource Muted}" Margin="0,14,0,6"/>
+                <ComboBox x:Name="AddCategory" IsEditable="True" Height="32" VerticalContentAlignment="Center"/>
+                <CheckBox x:Name="AddCheckNow" Content="Download it to the repository now" IsChecked="True" Margin="0,14,0,0"/>
+                <Button x:Name="AddButton" Style="{StaticResource PrimaryButton}" Content="Add to repository" HorizontalAlignment="Left" Margin="0,16,0,0"/>
+                <TextBlock x:Name="AddResult" TextWrapping="Wrap" Margin="0,12,0,0"/>
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
+        </Border>
+      </Grid>
+
       <!-- Activity view -->
       <Grid x:Name="ActivityView" Grid.Row="2" Margin="28,0,28,0" Visibility="Collapsed">
         <Grid.RowDefinitions>
@@ -391,6 +480,14 @@
             </ComboBox>
 
             <CheckBox x:Name="SettingKeep" Content="Keep installers in the local cache after installation" Margin="0,20,0,0"/>
+
+            <TextBlock Text="Server API key" FontWeight="SemiBold" FontSize="15" Margin="0,20,0,0"/>
+            <TextBlock Text="Only needed to add or remove applications and to start server checks. Leave empty to keep the saved key."
+                       Foreground="{StaticResource Muted}" Margin="0,4,0,8" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal">
+              <PasswordBox x:Name="SettingApiKey" Height="32" Width="360" VerticalContentAlignment="Center" Padding="6,0"/>
+              <TextBlock x:Name="SettingApiKeyState" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+            </StackPanel>
 
             <TextBlock Text="Client folders" FontWeight="SemiBold" FontSize="15" Margin="0,20,0,4"/>
             <TextBlock x:Name="SettingPaths" Foreground="{StaticResource Muted}" TextWrapping="Wrap"/>

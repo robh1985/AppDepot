@@ -8,6 +8,8 @@ function Invoke-DepotApi {
         [Parameter(Mandatory)] [string] $Path,
         [ValidateSet('GET', 'POST', 'PUT', 'DELETE')] [string] $Method = 'GET',
         $Body,
+        [string] $RawBody,
+        [string] $ContentType = 'application/json; charset=utf-8',
         [hashtable] $Query,
         [switch] $Admin,
         [string] $ServerUrl
@@ -17,8 +19,10 @@ function Invoke-DepotApi {
     $uri = '{0}/api/v1/{1}' -f $base, $Path.TrimStart('/')
     if ($Query -and $Query.Count) {
         $pairs = foreach ($k in $Query.Keys) {
-            if ($null -ne $Query[$k] -and "$($Query[$k])" -ne '') {
-                '{0}={1}' -f [uri]::EscapeDataString($k), [uri]::EscapeDataString([string]$Query[$k])
+            $v = $Query[$k]
+            if ($v -is [bool] -or $v -is [switch]) { $v = ([bool]$v).ToString().ToLowerInvariant() }
+            if ($null -ne $v -and "$v" -ne '') {
+                '{0}={1}' -f [uri]::EscapeDataString($k), [uri]::EscapeDataString([string]$v)
             }
         }
         if ($pairs) { $uri += '?' + ($pairs -join '&') }
@@ -39,8 +43,12 @@ function Invoke-DepotApi {
         $params.Headers['X-Api-Key'] = [string]$config.ApiKey
     }
     if ($PSBoundParameters.ContainsKey('Body')) {
-        $params.Body = ($Body | ConvertTo-Json -Depth 10 -Compress)
+        $params.Body = ConvertTo-Json -InputObject $Body -Depth 10 -Compress
         $params.ContentType = 'application/json; charset=utf-8'
+    }
+    elseif ($PSBoundParameters.ContainsKey('RawBody')) {
+        $params.Body = [Text.Encoding]::UTF8.GetBytes($RawBody)
+        $params.ContentType = $ContentType
     }
 
     Write-Verbose "AppDepot API: $Method $uri"

@@ -1,6 +1,7 @@
 # Database schema
 
-Created automatically on first start (SQLAlchemy). Every change the server makes — a check,
+Created automatically on first start (SQLAlchemy). Columns added by newer AppDepot versions are
+added to an existing database automatically at startup. Every change the server makes — a check,
 download, packaging step, purge, schedule or manifest change — updates these tables.
 
 ## `applications` — one row per application
@@ -8,7 +9,8 @@ download, packaging step, purge, schedule or manifest change — updates these t
 | Column | Purpose |
 |---|---|
 | `app_id`, `name`, `publisher`, `description`, `homepage`, `license`, `category`, `tags` | Catalog information |
-| `source_type`, `source_config` | Where new versions are found (manifest `source`) |
+| `source_type`, `source_config` | Where new versions are found (manifest `source`; `multi` + a list for `sources`) |
+| `preferred_types` | Per-app installer preference (`NULL` = server default, MSI first) |
 | `source_state` | Source bookkeeping, e.g. last ETag for `url` sources |
 | `installer_type`, `install_args`, `uninstall_command`, `uninstall_args`, `architecture`, `scope`, `upgrade_behavior`, `success_exit_codes` | Silent install settings from the manifest |
 | `detection` | Display-name / publisher regex and product code for clients |
@@ -25,7 +27,7 @@ download, packaging step, purge, schedule or manifest change — updates these t
 |---|---|
 | `application_id`, **`version`**, `status` (`available` / `purged`), `is_latest` | Available versions (purged rows keep history) |
 | `filename`, `relative_path`, `local_path`, **`unc_path`** | **Location** of the installer (server path and domain share path) |
-| `sha256`, `size_bytes`, `source_url`, `release_notes_url` | Integrity and provenance |
+| `sha256`, `size_bytes`, `source_url`, `source_type`, `release_notes_url` | Integrity and provenance (which source supplied the file) |
 | `installer_type`, `architecture`, `scope` | Installer technology |
 | `install_executable`, `install_arguments`, **`install_command`** | **Silent install** information |
 | `uninstall_executable`, `uninstall_arguments`, `uninstall_command` | Silent uninstall |

@@ -104,6 +104,7 @@ function Set-GuiView {
         Catalog   = @('Catalog', 'Applications available in the repository')
         Installed = @('Installed', 'Repository applications installed on this computer')
         Updates   = @('Updates', 'Installed applications with a newer version in the repository')
+        Add       = @('Add applications', 'Search winget and add applications to the repository')
         Activity  = @('Activity', 'What the repository server and this client have been doing')
         Settings  = @('Settings', 'Client configuration')
     }
@@ -112,12 +113,14 @@ function Set-GuiView {
     $isApps = $View -in 'Catalog', 'Installed', 'Updates'
     $ui.AppsView.Visibility = if ($isApps) { 'Visible' } else { 'Collapsed' }
     $ui.ActivityView.Visibility = if ($View -eq 'Activity') { 'Visible' } else { 'Collapsed' }
+    $ui.AddView.Visibility = if ($View -eq 'Add') { 'Visible' } else { 'Collapsed' }
     $ui.SettingsView.Visibility = if ($View -eq 'Settings') { 'Visible' } else { 'Collapsed' }
     $ui.SearchBox.Visibility = if ($isApps) { 'Visible' } else { 'Collapsed' }
     $ui.UpdateAllButton.Visibility = if ($View -eq 'Updates' -and @($script:Gui.Rows | Where-Object UpdateAvailable).Count) { 'Visible' } else { 'Collapsed' }
     if ($isApps) { Update-GuiList }
     if ($View -eq 'Activity') { Update-GuiEvents }
     if ($View -eq 'Settings') { Import-GuiSettings }
+    if ($View -eq 'Add') { Initialize-GuiAdd }
 }
 
 function Get-GuiInitials {
@@ -367,6 +370,8 @@ function Import-GuiSettings {
     $ui.SettingServer.Text = $config.ServerUrl
     foreach ($item in $ui.SettingTransfer.Items) { if ($item.Tag -eq $config.TransferMethod) { $ui.SettingTransfer.SelectedItem = $item } }
     $ui.SettingKeep.IsChecked = [bool]$config.KeepInstallers
+    $ui.SettingApiKey.Password = ''
+    $ui.SettingApiKeyState.Text = if ($config.ApiKey) { 'A key is saved' } else { 'No key saved' }
     $ui.SettingPaths.Text = "Configuration: $(Join-Path (Get-DepotDataPath) 'client.json')`nCache: $($config.CachePath)`nLogs: $($config.LogPath)"
 }
 
@@ -374,7 +379,10 @@ function Save-GuiSettings {
     $ui = $script:Gui.UI
     try {
         $transfer = if ($ui.SettingTransfer.SelectedItem) { $ui.SettingTransfer.SelectedItem.Tag } else { 'Auto' }
-        Set-DepotConfig -ServerUrl $ui.SettingServer.Text.Trim() -TransferMethod $transfer -KeepInstallers ([bool]$ui.SettingKeep.IsChecked) -Confirm:$false -ErrorAction Stop | Out-Null
+        $params = @{ ServerUrl = $ui.SettingServer.Text.Trim(); TransferMethod = $transfer; KeepInstallers = [bool]$ui.SettingKeep.IsChecked }
+        if ($ui.SettingApiKey.Password) { $params.ApiKey = $ui.SettingApiKey.Password }
+        Set-DepotConfig @params -Confirm:$false -ErrorAction Stop | Out-Null
+        Import-GuiSettings
         $ui.SettingsResult.Foreground = '#065F46'
         $ui.SettingsResult.Text = 'Settings saved.'
         Write-GuiLog 'Settings saved.'
@@ -406,5 +414,157 @@ function Test-GuiConnection {
             $ui.SettingsResult.Text = "Connection failed: $(if ($r) { $r.Error } else { $errors -join '; ' })"
         }
         Set-GuiStatus 'Ready'
+    }
+}
+
+# ----------------------------------------------------------------------------- Add applications
+$script:GuiDefaultCategories = @('Browsers', 'Communication', 'Development', 'Multimedia', 'Networking', 'Office', 'Security', 'Utilities')
+
+function Initialize-GuiAdd {
+    $ui = $script:Gui.UI
+    $ui.AddKeyBanner.Visibility = if ((Read-DepotConfig).ApiKey) { 'Collapsed' } else { 'Visible' }
+    $cats = @($script:GuiDefaultCategories) + @($script:Gui.Rows | ForEach-Object { $_.Category } | Where-Object { $_ })
+    $ui.AddCategory.ItemsSource = @($cats | Sort-Object -Unique)
+    $ui.WingetQuery.Focus() | Out-Null
+}
+
+function Search-GuiWinget {
+    $ui = $script:Gui.UI
+    $q = $ui.WingetQuery.Text.Trim()
+    if ($q.Length -lt 2) { $ui.WingetHint.Text = 'Type at least two characters.'; return }
+    $ui.WingetHint.Foreground = '#6B7280'
+    $ui.WingetHint.Text = "Searching winget for '$q'..."
+    Start-GuiJob -Status "Searching winget for '$q'..." -ArgumentList @($q) -Work {
+        param($Query)
+        Find-DepotWingetPackage -Query $Query -Limit 50
+    } -OnComplete {
+        param($output, $errors)
+        $ui = $script:Gui.UI
+        if ($errors.Count) {
+            $ui.WingetHint.Foreground = '#B91C1C'
+            $ui.WingetHint.Text = "Search failed: $($errors -join '; ')"
+            $ui.WingetResults.ItemsSource = $null
+        }
+        else {
+            $rows = @($output | ForEach-Object {
+                    [pscustomobject]@{ Id = $_.Id; Name = $_.Name; Version = $_.Version; InRepository = $_.InRepository
+                        InRepositoryText = $(if ($_.InRepository) { 'Yes' } else { '' }) }
+                })
+            $ui.WingetResults.ItemsSource = $rows
+            $ui.WingetHint.Foreground = '#6B7280'
+            $ui.WingetHint.Text = if ($rows.Count) { "$($rows.Count) result(s). Select one to see which installer would be used." } else { 'No packages found.' }
+        }
+        Set-GuiStatus 'Ready'
+    }
+}
+
+function Show-GuiAddPreview {
+    param($Row)
+    $ui = $script:Gui.UI
+    $script:Gui.AddPreview = $null
+    if (-not $Row) { $ui.AddPane.Visibility = 'Collapsed'; $ui.AddNoSelection.Visibility = 'Visible'; return }
+    $ui.AddPane.Visibility = 'Visible'
+    $ui.AddNoSelection.Visibility = 'Collapsed'
+    $ui.AddName.Text = $Row.Name
+    $ui.AddPublisher.Text = ''
+    $ui.AddDescription.Text = ''
+    $ui.AddId.Text = $Row.Id
+    $ui.AddVersion.Text = $Row.Version
+    $ui.AddInstaller.Text = ''; $ui.AddAllInstallers.Text = ''; $ui.AddFile.Text = ''
+    $ui.AddResult.Text = ''
+    $ui.AddMsiBadge.Background = '#F3F4F6'; $ui.AddMsiText.Foreground = '#374151'
+    $ui.AddMsiText.Text = 'Checking the installers available for this application...'
+    $ui.AddButton.IsEnabled = $false
+    $ui.AddButton.Content = if ($Row.InRepository) { 'Replace in repository' } else { 'Add to repository' }
+
+    Start-GuiJob -Status "Previewing $($Row.Id)..." -ArgumentList @($Row.Id) -Work {
+        param($Id)
+        Test-DepotAppSource -WingetId $Id
+    } -OnComplete {
+        param($output, $errors)
+        $ui = $script:Gui.UI
+        $pv = $output | Select-Object -Last 1
+        Set-GuiStatus 'Ready'
+        if (-not $pv -or $pv.Id -ne $ui.AddId.Text) {
+            if ($errors.Count -and $ui.AddPane.Visibility -eq 'Visible') {
+                $ui.AddMsiBadge.Background = '#FEE2E2'; $ui.AddMsiText.Foreground = '#991B1B'
+                $ui.AddMsiText.Text = "Preview failed: $($errors -join '; ')"
+            }
+            return   # a newer selection replaced this one
+        }
+        $script:Gui.AddPreview = $pv
+        $m = $pv.Manifest
+        $ui.AddName.Text = $m.name
+        $ui.AddPublisher.Text = $m.publisher
+        $ui.AddDescription.Text = $m.description
+        $ui.AddVersion.Text = $pv.LatestVersion
+        $ui.AddInstaller.Text = if ($pv.Installer) { "$($pv.Installer) from $($pv.Source)" } else { 'none found' }
+        $ui.AddAllInstallers.Text = ($pv.WingetInstallers | Sort-Object -Unique) -join ', '
+        $ui.AddFile.Text = $pv.FileName
+        $ui.AddCategory.Text = $m.category
+        if ($pv.MsiAvailable) {
+            $ui.AddMsiBadge.Background = '#D1FAE5'; $ui.AddMsiText.Foreground = '#065F46'
+            $ui.AddMsiText.Text = 'MSI installer available - it will be used.'
+        }
+        elseif ($pv.Ok) {
+            $ui.AddMsiBadge.Background = '#FEF3C7'; $ui.AddMsiText.Foreground = '#92400E'
+            $ui.AddMsiText.Text = "No MSI available. $($pv.Note)"
+        }
+        else {
+            $ui.AddMsiBadge.Background = '#FEE2E2'; $ui.AddMsiText.Foreground = '#991B1B'
+            $ui.AddMsiText.Text = "No usable installer found. $($pv.Errors -join '; ')"
+        }
+        $ui.AddButton.IsEnabled = $script:Gui.Actions -eq 0
+    }
+}
+
+function Invoke-GuiAddApp {
+    $ui = $script:Gui.UI
+    $pv = $script:Gui.AddPreview
+    if (-not $pv) { return }
+    $category = $ui.AddCategory.Text.Trim()
+    $check = [bool]$ui.AddCheckNow.IsChecked
+    $replace = [bool]$pv.InRepository
+    $ui.AddButton.IsEnabled = $false
+    $ui.AddResult.Foreground = '#374151'
+    $ui.AddResult.Text = "Adding $($pv.Id)..."
+    Write-GuiLog "Adding $($pv.Id) to the repository$(if ($check) { ' and downloading it' })..."
+    Start-GuiJob -Action -Status "Adding $($pv.Id) to the repository..." -ArgumentList @($pv.Id, $category, $check, $replace) -Work {
+        param($Id, $Category, $Check, $Replace)
+        $p = @{ WingetId = $Id; CheckNow = $Check; Replace = $Replace; Confirm = $false }
+        if ($Category) { $p.Category = $Category }
+        New-DepotApp @p
+    } -OnComplete {
+        param($output, $errors)
+        $ui = $script:Gui.UI
+        $r = $output | Select-Object -Last 1
+        if ($errors.Count -or -not $r -or -not $r.InRepository) {
+            $msg = if ($errors.Count) { $errors -join '; ' } else { 'The server did not add the application.' }
+            $ui.AddResult.Foreground = '#B91C1C'
+            $ui.AddResult.Text = "Could not add the application: $msg"
+            Write-GuiLog "Add failed: $msg"
+        }
+        else {
+            $ui.AddResult.Foreground = '#065F46'
+            $ui.AddResult.Text = if ($r.CheckQueued) {
+                "Added. The server is downloading $($r.Installer) $($r.LatestVersion) now; it appears in the Catalog when the download finishes (Refresh)."
+            } else { 'Added. It will be downloaded at the next scheduled check.' }
+            Write-GuiLog "Added $($r.Id) ($($r.Installer) $($r.LatestVersion))."
+            foreach ($row in @($ui.WingetResults.ItemsSource)) {
+                if ($row.Id -eq $r.Id) { $row.InRepository = $true; $row.InRepositoryText = 'Yes' }
+            }
+            $ui.WingetResults.Items.Refresh()
+            $ui.AddButton.Content = 'Replace in repository'
+            if ($r.CheckQueued) { Start-GuiRefreshLater }
+        }
+        $ui.AddButton.IsEnabled = $true
+    }
+}
+
+function Start-GuiRefreshLater {
+    # Refresh the catalog after the server has had time to download the new application.
+    Start-GuiJob -Status 'Waiting for the server download...' -Work { Start-Sleep -Seconds 45 } -OnComplete {
+        param($output, $errors)
+        Update-GuiData
     }
 }

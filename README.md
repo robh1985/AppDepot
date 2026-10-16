@@ -33,6 +33,8 @@ or a PowerShell module.
 - Organised repository: `<root>\<app id>\<version>\installer|intune`, shared over SMB and HTTP
 - Finds new versions automatically from **winget manifests**, **GitHub releases**, **web pages**
   (regex), **JSON APIs** or **fixed "latest" URLs** (version read from the MSI)
+- **Prefers MSI installers**: every source of an app is checked (an app can have several) and an
+  MSI is used whenever one exists for the newest version, before falling back to other types
 - Keeps the last **3 versions** per app (configurable globally and per app)
 - **Global schedule** (cron) plus optional **per-application schedules** or manual-only apps
 - Every downloaded installer is packaged as **`.intunewin`** (built-in packager, no Windows
@@ -44,10 +46,13 @@ or a PowerShell module.
 - Hash verification, per-app locking, concurrency limits, error tracking per application
 
 **Client**
-- **GUI**: catalog, installed apps, updates (with badge and *Update all*), activity, settings
+- **GUI**: catalog, installed apps, updates (with badge and *Update all*), **add apps** (search
+  winget, preview, add), activity, settings
 - **CLI**: `depot list | search | show | install | upgrade | uninstall | download | status …`
   with `--json` output and meaningful exit codes
-- **PowerShell module**: 18 documented cmdlets, pipeline support, `-WhatIf`, tab completion,
+- **Adding applications**: search winget and add in one click/command — the manifest is generated
+  (name, publisher, description, category, detection) and previewed (MSI or not) before saving
+- **PowerShell module**: 23 documented cmdlets, pipeline support, `-WhatIf`, tab completion,
   formatted output, `Get-Help about_AppDepot`
 - Installs from the SMB share or over HTTP, verifies SHA-256, handles reboot codes,
   detects installed versions from Programs and Features, optional daily auto-update task
@@ -93,9 +98,17 @@ depot upgrade --all
 Show-DepotGui
 ```
 
-**3. Add applications** by dropping a manifest into `manifests\` (see
-[docs/manifest-reference.md](docs/manifest-reference.md)). The simplest form uses winget's
-metadata:
+**3. Add applications** — from the GUI's *Add apps* page, or:
+
+```powershell
+depot config set ApiKey <server api key>
+depot app search notepad
+depot app add Notepad++.Notepad++ --check
+```
+
+See [docs/adding-applications.md](docs/adding-applications.md). You can also drop a manifest into
+`manifests\` ([docs/manifest-reference.md](docs/manifest-reference.md)). The simplest form uses
+winget's metadata:
 
 ```yaml
 id: Notepad++.Notepad++
@@ -111,6 +124,7 @@ detection:
 
 ## Documentation
 
+- [Adding applications](docs/adding-applications.md) — winget search, previews, manifests, MSI preference
 - [Server guide](docs/server.md) — installation, configuration, networking across VLANs,
   schedules, retention, admin CLI, backup
 - [Manifest reference](docs/manifest-reference.md) — sources, installer types, detection
@@ -121,7 +135,7 @@ detection:
 ## Testing
 
 ```bash
-cd server && pip install -e .[test] && pytest          # 39 tests
+cd server && pip install -e .[test] && pytest          # 65 tests
 ```
 
 ```powershell

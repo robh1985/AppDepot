@@ -31,6 +31,11 @@ sources:
   timeout: 600
   verify_tls: true
 
+installers:
+  # Installer types in order of preference, applied across all sources of an application.
+  # An MSI is used whenever one exists for the newest version.
+  preferred_types: [msi, wix, msix, appx, burn, inno, nullsoft, exe]
+
 intune:
   enabled: true
   packager: native              # native (built in, any OS) | official (IntuneWinAppUtil.exe)

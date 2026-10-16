@@ -1,10 +1,9 @@
 import hashlib
 
 from fastapi.testclient import TestClient
-from sqlalchemy import select
 
 from appdepot_server.api import create_app
-from appdepot_server.db import Application, AppVersion
+
 from appdepot_server.intunewin import read_intunewin
 
 from .conftest import WEB_APP, publish_web_version, write_manifest
@@ -96,10 +95,10 @@ def test_hash_mismatch_rejected(ctx, web, monkeypatch):
 
     app_id = setup_app(ctx)
     publish_web_version(web, "3.0")
-    monkeypatch.setattr(WebSource, "resolve", lambda self, c: ReleaseInfo(
-        version="3.0", url="https://contoso.example/files/tool-3.0.exe", sha256="00" * 32))
+    monkeypatch.setattr(WebSource, "resolve_all", lambda self, c: [ReleaseInfo(
+        version="3.0", url="https://contoso.example/files/tool-3.0.exe", sha256="00" * 32)])
     r = ctx.updater.check_app(app_id)
-    assert r.status == "failed" and "SHA-256 mismatch" in r.message
+    assert r.status == "failed" and "SHA-256 mismatch" in r.message and "All downloads failed" in r.message
     assert not list((ctx.repo.root / ".tmp").iterdir())
 
 

@@ -52,6 +52,14 @@ CMDLETS
         Invoke-DepotServerCheck Check the internet for new versions now  (*)
         Set-DepotSchedule       Change global / per-app schedules        (*)
 
+    Adding applications to the repository                              (*)
+        Find-DepotWingetPackage Search the winget catalog
+        Test-DepotAppSource     Preview: newest version, installers, MSI or not
+        New-DepotApp            Add from winget (-WingetId), a YAML file (-Path)
+                                or a hashtable (-Manifest); -CheckNow downloads it
+        Remove-DepotApp         Remove an application (optionally its files)
+        Get-DepotManifestTemplate  Manifest templates for hand-written definitions
+
     Client
         Get-DepotConfig / Set-DepotConfig / Test-DepotConnection
         Compare-DepotVersion    Version comparison used by client and server
@@ -144,6 +152,11 @@ EXAMPLES
     Collect an Intune package and its deployment notes:
 
         Save-DepotInstaller Mozilla.Firefox -IncludeIntunePackage -Destination C:\Intune\Firefox
+
+    Add an application from winget and download it now (MSI preferred):
+
+        Find-DepotWingetPackage notepad
+        New-DepotApp -WingetId Notepad++.Notepad++ -Category Development -CheckNow
 
     Ask the server to fetch a new Chrome release now:
 

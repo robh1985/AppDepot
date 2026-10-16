@@ -41,8 +41,9 @@ Show-DepotGui        # or: depot gui, or the Start menu shortcut
 | **Catalog** | Every application in the repository as a card with publisher, category, version and a status pill (*Available*, *Installed*, *Update available*). Search box filters by name, id, publisher or category. |
 | **Installed** | Repository applications installed on this computer. |
 | **Updates** | Installed applications with a newer version. The sidebar badge shows the count; *Update all* installs them. |
+| **Add apps** | Search winget, preview an application (with an *MSI available* badge), choose its category and add it to the repository — optionally downloading it immediately. Needs the server API key (Settings). |
 | **Activity** | The server's event log (downloads, updates, purges, errors) and a log of this session's operations. |
-| **Settings** | Server URL, transfer method, cache option, *Test connection*, *Open log folder*. |
+| **Settings** | Server URL, transfer method, cache option, server API key, *Test connection*, *Open log folder*. |
 
 Selecting an application opens the details pane: description, latest and installed versions,
 installer technology, download size, date added to the repository, licence, website, a
@@ -74,6 +75,13 @@ depot events [--app ID] [--last N]       Server event log [--errors]
 depot server check [<id>...]             Check for new versions now [--force] [--wait]   (API key)
 depot server schedule global "<cron>"                                                    (API key)
 depot server schedule <id> "<cron>"|manual|global                                        (API key)
+
+depot app search <query>                Search winget                                      (API key)
+depot app add <wingetId> [--category C]  Add from winget [--check] [--replace] [--yes]      (API key)
+depot app add --file <manifest.yaml>     Add from a manifest file                           (API key)
+depot app test <wingetId>|--file F|--id ID   Preview: version, installers, MSI or not       (API key)
+depot app template <type>                Manifest template (winget github web json url multi)
+depot app remove <id> [--delete-files]                                                      (API key)
 
 depot config                             Show configuration
 depot config set <name> <value>          ServerUrl, TransferMethod, CachePath, LogPath, TimeoutSec,
@@ -109,6 +117,7 @@ parameters and examples, and `Get-Help about_AppDepot` for the conceptual overvi
 | Catalog | `Get-DepotApp`, `Find-DepotApp`, `Get-DepotAppVersion` |
 | This computer | `Get-DepotInstalledApp`, `Get-DepotUpdate`, `Install-DepotApp`, `Update-DepotApp`, `Uninstall-DepotApp`, `Save-DepotInstaller` |
 | Server | `Get-DepotServerStatus`, `Get-DepotEvent`, `Invoke-DepotServerCheck`*, `Set-DepotSchedule`* |
+| Adding applications | `Find-DepotWingetPackage`*, `Test-DepotAppSource`*, `New-DepotApp`*, `Remove-DepotApp`*, `Get-DepotManifestTemplate`* — see [adding-applications.md](adding-applications.md) |
 | Client | `Get-DepotConfig`, `Set-DepotConfig`, `Test-DepotConnection`, `Compare-DepotVersion`, `Show-DepotGui` |
 
 \* needs the server API key (`Set-DepotConfig -ApiKey` or `$env:APPDEPOT_API_KEY`).

@@ -7,11 +7,16 @@ license: LGPL-2.1
 category: Utilities
 tags: [archive, compression, zip]
 
-source:
-  type: winget
-  package: 7zip.7zip
-  architecture: x64
-  installer_type: exe          # 7-Zip publishes NSIS-based EXE installers (silent: /S)
+# Two sources: winget only lists 7-Zip's EXE installer, while 7-zip.org also
+# publishes an MSI. Both are checked and the MSI is preferred.
+sources:
+  - type: web
+    url: https://www.7-zip.org/download.html
+    version_regex: 'Download 7-Zip (?P<version>\d+\.\d+)'
+    download_url: https://www.7-zip.org/a/7z{version_nodots}-x64.msi
+  - type: winget
+    package: 7zip.7zip
+    architecture: x64
 
 detection:
   display_name: '^7-Zip'

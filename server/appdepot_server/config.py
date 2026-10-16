@@ -50,6 +50,10 @@ DEFAULTS: dict[str, Any] = {
         "timeout": 600,
         "verify_tls": True,
     },
+    "installers": {
+        # Installer types in order of preference, applied across all sources of an app.
+        "preferred_types": ["msi", "wix", "msix", "appx", "burn", "inno", "nullsoft", "exe"],
+    },
     "intune": {
         "enabled": True,
         # native = built-in packager (any OS); official = IntuneWinAppUtil.exe (Windows)
@@ -116,6 +120,11 @@ class Config:
             if not (len(rel) > 1 and rel[1] == ":"):  # not a Windows drive path
                 url = prefix + str(self._resolve(rel))
         return url
+
+    @property
+    def preferred_types(self) -> list[str]:
+        return [str(t).lower() for t in self.data.get("installers", {}).get("preferred_types") or []] \
+            or list(DEFAULTS["installers"]["preferred_types"])
 
     @property
     def public_url(self) -> str:

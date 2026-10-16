@@ -47,6 +47,7 @@ Read endpoints are open to the network. Endpoints marked **admin** need the `X-A
   "uninstall": {"executable": "msiexec.exe", "arguments": "/x {1294A4C5-…} /qn /norestart", "command": "msiexec.exe /x …"},
   "success_exit_codes": [0, 1641, 1707, 3010],
   "reboot_exit_codes": [3010, 1641],
+  "source_type": "winget",
   "upgrade_behavior": "install",
   "intune": {
     "status": "ok", "error": null,
@@ -61,8 +62,15 @@ Read endpoints are open to the network. Endpoints marked **admin** need the `X-A
 
 | Method & path | Description |
 |---|---|
-| `POST /apps` | Add/update an application. Body: manifest as JSON (same schema as YAML) |
-| `DELETE /apps/{id}?delete_files=false` | Remove an application (optionally its files) |
+| `POST /apps?replace=false&check=false` | Add an application. Body: manifest as JSON (same schema as YAML). Writes the manifest file; `409` if it exists unless `replace=true`; `check=true` downloads it now |
+| `POST /apps/yaml?replace=&check=` | Same, with a YAML manifest as the raw body |
+| `POST /apps/preview` | Preview a manifest (JSON body): newest version, every candidate installer, `msi_available`, the selected installer and why. Nothing is saved or downloaded |
+| `POST /apps/preview/yaml` | Same for a YAML body |
+| `POST /apps/{id}/preview` | Preview an application already in the repository |
+| `GET /winget/search?q=&limit=25` | Search the winget catalog; each result has `in_repository` |
+| `GET /winget/packages/{wingetId}?category=&architecture=x64` | Generate a manifest from winget, with `info` (installer types, `msi_available`) and `preview` |
+| `GET /templates/{type}` | Manifest template: winget, github, web, json, url, multi |
+| `DELETE /apps/{id}?delete_files=false` | Remove an application (optionally its files). The manifest file is renamed to `*.removed` |
 | `POST /apps/{id}/check?force=false&wait=false` | Check now; `wait=true` returns the result |
 | `POST /check` | Body `{"app_ids": [...] or null, "force": false}` — queue checks |
 | `PUT /schedule` | Body `{"schedule": "0 3 * * *"}` — global schedule |

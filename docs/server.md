@@ -14,7 +14,8 @@ The AppDepot server is a Python service that
 - Python 3.10 or newer
 - Disk space: roughly *(number of apps) × 3 versions × 2* (installer + `.intunewin`)
 - Outbound HTTPS to the vendors' download sites, `api.github.com` and
-  `raw.githubusercontent.com` (winget and GitHub sources)
+  `raw.githubusercontent.com` (winget and GitHub sources) and `cdn.winget.microsoft.com`
+  (winget search when adding applications)
 - Inbound TCP 8080 (API/HTTP) and 445 (SMB) from your client VLANs
 
 ## Installation on Windows Server (recommended)
@@ -97,6 +98,7 @@ docker run -d --name appdepot -p 8080:8080 -v /srv/appdepot:/data appdepot
 | `sources.github_token` | – | GitHub token: raises the API limit from 60 to 5,000 requests/hour. **Recommended** when you use winget or GitHub sources |
 | `sources.proxy` | – | Outbound proxy URL |
 | `sources.timeout` | `600` | Download timeout (seconds) |
+| `installers.preferred_types` | `[msi, wix, msix, appx, burn, inno, nullsoft, exe]` | Installer preference applied across all sources of an app (MSI first) |
 | `intune.enabled` | `true` | Build Intune packages |
 | `intune.packager` | `native` | `native` (built-in) or `official` (IntuneWinAppUtil.exe) |
 | `intune.intunewinapputil_path` | – | Path to IntuneWinAppUtil.exe for `official` |
@@ -164,8 +166,11 @@ apply immediately.
 
 ## What happens during a check
 
-1. The source is queried for the latest version and download URL.
-2. If that version is already stored, the app is marked *up to date* (nothing downloaded).
+1. **Every source** is queried; each returns all the installers it offers for its newest version.
+2. The newest version is chosen and, for it, the most preferred installer type (MSI first —
+   see [manifest-reference.md](manifest-reference.md#installer-preference-msi-first)).
+   If that version is already stored with an equally good installer, the app is *up to date*;
+   if an MSI appeared for a version stored as an EXE, the EXE is replaced.
    For `url` sources the ETag/Last-Modified headers are compared first.
 3. The installer is streamed to `<root>\.tmp`, its SHA-256 computed and compared with the
    hash published by the source (winget, GitHub). Mismatches are rejected.
@@ -198,7 +203,16 @@ appdepot-server [--config FILE] <command>
   events [--app ID] [--limit N]  event log
   validate FILE ...              validate manifest files
   verify-package FILE            verify an .intunewin (MAC + digest)
+
+  app search QUERY               search the winget catalog
+  app add WINGET_ID [--category C] [--arch x64] [--check] [--yes]
+  app add --file MANIFEST.yaml [--check]
+  app test (WINGET_ID | --file F | --id APP_ID)   preview: version, installers, MSI or not
+  app template TYPE              print a manifest template (winget github web json url multi)
+  app remove APP_ID [--delete-files]
 ```
+
+See [adding-applications.md](adding-applications.md).
 
 ## Backup and recovery
 

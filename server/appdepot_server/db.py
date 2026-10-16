@@ -22,7 +22,9 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    inspect,
     select,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -72,6 +74,7 @@ class Application(Base):
     upgrade_behavior: Mapped[str] = mapped_column(String(30), default="install")
     detection: Mapped[dict | None] = mapped_column(JSON, default=dict)
     success_exit_codes: Mapped[list | None] = mapped_column(JSON, default=list)
+    preferred_types: Mapped[list | None] = mapped_column(JSON)   # None = server default
 
     # Scheduling
     schedule: Mapped[str | None] = mapped_column(String(100))  # from manifest; None = global
@@ -95,6 +98,14 @@ class Application(Base):
     versions: Mapped[list["AppVersion"]] = relationship(
         back_populates="application", cascade="all, delete-orphan"
     )
+
+    @property
+    def source_list(self) -> list[dict]:
+        """All sources of the application, in preference order."""
+        cfg = self.source_config or {}
+        if self.source_type == "multi":
+            return [dict(x) for x in cfg.get("sources") or []]
+        return [dict(cfg, type=self.source_type)]
 
     @property
     def effective_schedule(self) -> str | None:
@@ -122,6 +133,7 @@ class AppVersion(Base):
     sha256: Mapped[str] = mapped_column(String(64))
     size_bytes: Mapped[int] = mapped_column(Integer)
     source_url: Mapped[str | None] = mapped_column(Text)
+    source_type: Mapped[str | None] = mapped_column(String(30))  # source that supplied the file
     release_notes_url: Mapped[str | None] = mapped_column(Text)
 
     # Silent install details for this exact file
@@ -193,6 +205,24 @@ class Database:
 
     def create_all(self) -> None:
         Base.metadata.create_all(self.engine)
+        self.migrate()
+
+    def migrate(self) -> list[str]:
+        """Add columns introduced by newer AppDepot versions to existing tables."""
+        added = []
+        insp = inspect(self.engine)
+        add_kw = "ADD" if self.engine.dialect.name == "mssql" else "ADD COLUMN"
+        with self.engine.begin() as conn:
+            for table in Base.metadata.sorted_tables:
+                if not insp.has_table(table.name):
+                    continue
+                existing = {c["name"] for c in insp.get_columns(table.name)}
+                for col in table.columns:
+                    if col.name not in existing:
+                        ddl = col.type.compile(dialect=self.engine.dialect)
+                        conn.execute(text(f"ALTER TABLE {table.name} {add_kw} {col.name} {ddl}"))
+                        added.append(f"{table.name}.{col.name}")
+        return added
 
     @contextmanager
     def session(self) -> Iterator[Session]:

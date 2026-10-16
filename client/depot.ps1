@@ -21,7 +21,7 @@ if (Test-Path -LiteralPath $modulePath) { Import-Module $modulePath -Force } els
 # ----------------------------------------------------------------------------- argument parsing
 $positional = New-Object System.Collections.Generic.List[string]
 $opts = @{}
-$flagsWithValue = 'version', 'category', 'dest', 'server', 'last', 'app', 'method'
+$flagsWithValue = 'version', 'category', 'dest', 'server', 'last', 'app', 'method', 'file', 'arch', 'id', 'limit'
 $argsList = @($CommandLine | Where-Object { $null -ne $_ })
 for ($i = 0; $i -lt $argsList.Count; $i++) {
     $a = $argsList[$i]
@@ -112,6 +112,14 @@ SERVER
   server schedule global "<cron>"    Change the global update schedule                  (API key)
   server schedule <id> "<cron>"      Per-app schedule; use manual or global as value    (API key)
 
+ADD APPLICATIONS TO THE REPOSITORY                                                    (API key)
+  app search <query>                 Search the winget catalog
+  app add <wingetId> [--category C]  Add from winget [--arch x64] [--check] [--replace] [--yes]
+  app add --file <manifest.yaml>     Add from a manifest file [--check] [--replace]
+  app test <wingetId>|--file F|--id ID   Preview sources and the installer that would be used
+  app template <type>                Manifest template: winget github web json url multi
+  app remove <id> [--delete-files]   Remove an application [--yes]
+
 CLIENT
   config                             Show configuration
   config set <name> <value>          ServerUrl, TransferMethod (Auto|Unc|Http), KeepInstallers, ApiKey ...
@@ -131,6 +139,7 @@ EXIT CODES
     'install' = "depot install <id> [<id>...] [--version V] [--force] [--keep]`n`nInstalls applications silently from the repository. Equivalent cmdlet: Install-DepotApp.`n  --version V   install a specific stored version (default latest)`n  --force       reinstall even if the same or newer version is installed`n  --keep        keep the installer in the local cache"
     'upgrade' = "depot upgrade                 list available updates`ndepot upgrade <id> [<id>...]  update specific applications`ndepot upgrade --all           update everything`n`nEquivalent cmdlets: Get-DepotUpdate, Update-DepotApp."
     'config'  = "depot config                        show configuration`ndepot config set <name> <value>     change a setting`n`nNames: ServerUrl, TransferMethod (Auto|Unc|Http), CachePath, LogPath, TimeoutSec,`n       InstallTimeoutMinutes, KeepInstallers (true|false), ApiKey`nExample: depot config set ServerUrl http://appdepot.corp.example.com:8080"
+    'app'     = "depot app search <query>`ndepot app add <wingetId> [--category C] [--arch x64|x86|arm64] [--check] [--replace] [--yes]`ndepot app add --file <manifest.yaml> [--check] [--replace] [--yes]`ndepot app test <wingetId> | --file <manifest.yaml> | --id <appId>`ndepot app template winget|github|web|json|url|multi`ndepot app remove <id> [--delete-files] [--yes]`n`nThe server checks every source of an application and prefers an MSI installer.`n'app test' and 'app add' show which installer will be used before anything is saved.`n--check downloads the application immediately. Requires the API key (depot config set ApiKey <key>)."
     'server'  = "depot server check [<id>...] [--force] [--wait]`ndepot server schedule global `"0 3 * * *`"`ndepot server schedule <id> `"0 */6 * * *`" | manual | global`n`nCron format: minute hour day-of-month month day-of-week. Requires the API key:`n  depot config set ApiKey <key>   (or set APPDEPOT_API_KEY)"
 }
 
@@ -242,6 +251,75 @@ try {
             if ($opts.app) { $params.Id = $opts.app } elseif ($rest.Count) { $params.Id = $rest[0] }
             if ($opts.errors) { $params.Level = 'error' }
             Write-Out (Get-DepotEvent @params) Time, Level, Event, Id, Message
+        }
+        'app' {
+            Assert-Arg 1 'depot app search|add|test|template|remove ...'
+            $sub = $rest[0].ToLowerInvariant()
+            $subArgs = @($rest | Select-Object -Skip 1)
+            switch ($sub) {
+                'search' {
+                    if (-not $subArgs.Count) { Write-Host 'Usage: depot app search <query>' -ForegroundColor Yellow; exit 2 }
+                    $limit = if ($opts.limit) { [int]$opts.limit } else { 25 }
+                    $found = Find-DepotWingetPackage -Query ($subArgs -join ' ') -Limit $limit
+                    if (-not $found) { Write-Info 'No winget packages found.' Yellow; exit 0 }
+                    Write-Out $found Id, Name, Version, InRepository
+                    Write-Info "Add one with: depot app add <Id> [--category C] [--check]"
+                }
+                { $_ -in 'add', 'test' } {
+                    $p = @{}
+                    if ($opts.file) { $p.Path = $opts.file }
+                    elseif ($sub -eq 'test' -and $opts.id) { $p.Id = $opts.id }
+                    elseif ($subArgs.Count) {
+                        $p.WingetId = $subArgs[0]
+                        if ($opts.category) { $p.Category = $opts.category }
+                        if ($opts.arch) { $p.Architecture = $opts.arch }
+                    }
+                    else { Write-Host $help['app']; exit 2 }
+
+                    $pv = Test-DepotAppSource @p
+                    if ($json -and $sub -eq 'test') { Write-Out $pv; exit 0 }
+                    if (-not $json) {
+                        Write-Host ''
+                        Write-Host "$(if ($pv.Name) { $pv.Name } else { $pv.Id })" -ForegroundColor Cyan -NoNewline
+                        Write-Host "  [$($pv.Id)]  latest $($pv.LatestVersion)$(if ($pv.Category) { "  category $($pv.Category)" })"
+                        $color = if ($pv.MsiAvailable) { 'Green' } elseif ($pv.Ok) { 'Yellow' } else { 'Red' }
+                        Write-Host "  $($pv.Note)" -ForegroundColor $color
+                        if ($pv.Candidates) { Write-Out $pv.Candidates Version, Type, Source, FileName }
+                        foreach ($e in $pv.Errors) { Write-Host "  ! $e" -ForegroundColor Yellow }
+                        if ($pv.InRepository -and $sub -eq 'add' -and -not $opts.replace) {
+                            Write-Host "$($pv.Id) is already in the repository (use --replace to overwrite)." -ForegroundColor Yellow
+                            exit 1
+                        }
+                    }
+                    if ($sub -eq 'test') { if ($pv.Ok) { exit 0 } else { exit 1 } }
+
+                    if (-not $opts.yes -and -not $json) {
+                        $answer = Read-Host "Add $($pv.Id) to the repository? [y/N]"
+                        if ($answer -notmatch '^(y|yes)$') { exit 1 }
+                    }
+                    if ($p.ContainsKey('Id')) { $p.Remove('Id') }
+                    $r = New-DepotApp @p -CheckNow:([bool]$opts.check) -Replace:([bool]$opts.replace) -Confirm:$false
+                    if ($json) { Write-Out $r; exit 0 }
+                    Write-Info "Added $($r.Id) ($($r.ManifestPath))." Green
+                    if ($opts.check) { Write-Info "Download started on the server. Follow it with: depot events --app $($r.Id)" }
+                    else { Write-Info "It will be downloaded at the next scheduled check, or now with: depot server check $($r.Id)" }
+                }
+                'template' {
+                    if (-not $subArgs.Count) { Write-Host 'Usage: depot app template winget|github|web|json|url|multi' -ForegroundColor Yellow; exit 2 }
+                    Get-DepotManifestTemplate -Type $subArgs[0] | Write-Output
+                }
+                { $_ -in 'remove', 'delete' } {
+                    if (-not $subArgs.Count) { Write-Host 'Usage: depot app remove <id> [--delete-files] [--yes]' -ForegroundColor Yellow; exit 2 }
+                    if (-not $opts.yes -and -not $json) {
+                        $extra = if ($opts.'delete-files') { ' and delete its files' } else { '' }
+                        $answer = Read-Host "Remove $($subArgs[0]) from the repository$extra? [y/N]"
+                        if ($answer -notmatch '^(y|yes)$') { exit 1 }
+                    }
+                    $r = Remove-DepotApp -Id $subArgs[0] -DeleteFiles:([bool]$opts.'delete-files') -Confirm:$false
+                    Write-Info "Removed $($r.deleted)." Green
+                }
+                default { Write-Host $help['app']; exit 2 }
+            }
         }
         'server' {
             Assert-Arg 1 'depot server check|schedule ...'

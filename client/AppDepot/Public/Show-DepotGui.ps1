@@ -9,8 +9,9 @@ function Show-DepotGui {
           Catalog    every application in the repository, with details, versions and install button
           Installed  catalog applications installed on this computer
           Updates    installed applications with a newer version available, with "Update all"
+          Add apps   search winget and add applications to the repository (needs the API key)
           Activity   the server's event log and the operations performed in this session
-          Settings   server URL, transfer method and cache options
+          Settings   server URL, transfer method, cache options and API key
 
         All server calls and installations run in the background so the window stays responsive.
         Run it elevated (as administrator) to install machine-wide applications; the window offers
@@ -52,6 +53,7 @@ function Show-DepotGui {
         Actions   = 0
         Selected  = $null
         Connected = $false
+        AddPreview = $null
     }
 
     # ---------------------------------------------------------------- timer for background jobs
@@ -67,6 +69,7 @@ function Show-DepotGui {
     $ui.NavCatalog.Add_Checked({ Set-GuiView 'Catalog' })
     $ui.NavInstalled.Add_Checked({ Set-GuiView 'Installed' })
     $ui.NavUpdates.Add_Checked({ Set-GuiView 'Updates' })
+    $ui.NavAdd.Add_Checked({ Set-GuiView 'Add' })
     $ui.NavActivity.Add_Checked({ Set-GuiView 'Activity' })
     $ui.NavSettings.Add_Checked({ Set-GuiView 'Settings' })
 
@@ -84,6 +87,14 @@ function Show-DepotGui {
             if ($url -match '^https?://') { Start-Process $url }
         })
     $ui.SaveSettingsButton.Add_Click({ Save-GuiSettings })
+    $ui.WingetSearchButton.Add_Click({ Search-GuiWinget })
+    $ui.WingetQuery.Add_KeyDown({
+            param($sender, $e)
+            if ($e.Key -eq 'Return') { Search-GuiWinget }
+        })
+    $ui.WingetResults.Add_SelectionChanged({ Show-GuiAddPreview $script:Gui.UI.WingetResults.SelectedItem })
+    $ui.AddButton.Add_Click({ Invoke-GuiAddApp })
+    $ui.AddOpenSettings.Add_Click({ $script:Gui.UI.NavSettings.IsChecked = $true })
     $ui.TestConnectionButton.Add_Click({ Test-GuiConnection })
     $ui.OpenLogButton.Add_Click({
             $path = (Read-DepotConfig).LogPath

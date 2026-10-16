@@ -31,6 +31,11 @@ class ReleaseInfo:
     # Opaque state stored on the application (e.g. ETag) to skip unchanged downloads
     state: dict[str, Any] = field(default_factory=dict)
     unchanged: bool = False
+    # Filled in by the updater when candidates from several sources are compared
+    source_index: int = 0
+    source_type: str = ""
+    order: int = 0                 # preference order within its source
+    downloaded: Any = None         # (path, sha256, size, final_url, cd_filename) once fetched
 
 
 @dataclass
@@ -61,6 +66,14 @@ class Source:
 
     def resolve(self, ctx: SourceContext) -> ReleaseInfo:  # pragma: no cover - abstract
         raise NotImplementedError
+
+    def resolve_all(self, ctx: SourceContext) -> list[ReleaseInfo]:
+        """Every installer this source offers for its latest version, best first.
+
+        The updater compares the candidates of all sources and picks the preferred
+        installer type (MSI by default). Sources offering a single file return one item.
+        """
+        return [self.resolve(ctx)]
 
 
 def make_client(sources_cfg: dict[str, Any]) -> httpx.Client:
@@ -100,6 +113,18 @@ def json_path(data: Any, path: str) -> Any:
         else:
             raise KeyError(path)
     return cur
+
+
+def type_from_filename(name: str | None) -> str | None:
+    ext = (name or "").lower().rsplit(".", 1)[-1] if "." in (name or "") else ""
+    return {"msi": "msi", "msix": "msix", "msixbundle": "msix", "appx": "appx",
+            "appxbundle": "appx"}.get(ext)
+
+
+def as_list(value: Any) -> list:
+    if value is None:
+        return []
+    return list(value) if isinstance(value, (list, tuple)) else [value]
 
 
 def filename_from_url(url: str) -> str:

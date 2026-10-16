@@ -26,6 +26,6 @@ $completer = {
 }
 foreach ($cmd in 'Get-DepotApp', 'Get-DepotAppVersion', 'Install-DepotApp', 'Update-DepotApp', 'Uninstall-DepotApp',
     'Save-DepotInstaller', 'Get-DepotServerStatus', 'Get-DepotEvent', 'Invoke-DepotServerCheck', 'Set-DepotSchedule',
-    'Get-DepotInstalledApp', 'Get-DepotUpdate') {
+    'Get-DepotInstalledApp', 'Get-DepotUpdate', 'Remove-DepotApp', 'Test-DepotAppSource') {
     Register-ArgumentCompleter -CommandName $cmd -ParameterName Id -ScriptBlock $completer
 }

@@ -229,3 +229,59 @@ Describe 'Module quality' {
         }
     }
 }
+
+Describe 'Adding applications' {
+    BeforeAll {
+        $env:APPDEPOT_API_KEY = 'test-key'
+        $script:Generated = [pscustomobject]@{
+            manifest = [pscustomobject]@{ id = 'Contoso.Viewer'; name = 'Contoso PDF Viewer'; category = 'Office' }
+            info = [pscustomobject]@{ installer_types = @('wix', 'nullsoft') }
+            in_repository = $false
+            preview = [pscustomobject]@{
+                id = 'Contoso.Viewer'; ok = $true; latest_version = '3.2.1'; msi_available = $true
+                note = 'Selected MSI from winget (source 1 of 1)'; errors = @()
+                selected = [pscustomobject]@{ type = 'wix'; source = 'winget'; source_index = 1; filename = 'viewer.msi' }
+                candidates = @([pscustomobject]@{ version = '3.2.1'; type = 'wix'; source = 'winget'; source_index = 1; filename = 'viewer.msi' })
+            }
+        }
+    }
+    AfterAll { Remove-Item Env:\APPDEPOT_API_KEY }
+
+    It 'previews a winget package' {
+        Mock -ModuleName AppDepot Invoke-DepotApi { $script:Generated } -ParameterFilter { $Path -eq 'winget/packages/Contoso.Viewer' }
+        $pv = Test-DepotAppSource -WingetId Contoso.Viewer
+        $pv.Installer | Should -Be 'wix'
+        $pv.MsiAvailable | Should -BeTrue
+        $pv.Category | Should -Be 'Office'
+    }
+
+    It 'adds the generated manifest and passes -CheckNow' {
+        Mock -ModuleName AppDepot Invoke-DepotApi { $script:Generated } -ParameterFilter { $Path -eq 'winget/packages/Contoso.Viewer' }
+        Mock -ModuleName AppDepot Invoke-DepotApi { [pscustomobject]@{ id = 'Contoso.Viewer'; manifest_path = 'C:\m\Contoso.Viewer.yaml'; check_queued = $true } } -ParameterFilter { $Path -eq 'apps' }
+        $r = New-DepotApp -WingetId Contoso.Viewer -CheckNow -Confirm:$false
+        $r.InRepository | Should -BeTrue
+        $r.CheckQueued | Should -BeTrue
+        Should -Invoke -ModuleName AppDepot Invoke-DepotApi -ParameterFilter { $Path -eq 'apps' -and $Method -eq 'POST' -and $Query.check -eq $true }
+    }
+
+    It 'does not add anything with -WhatIf' {
+        Mock -ModuleName AppDepot Invoke-DepotApi { $script:Generated } -ParameterFilter { $Path -eq 'winget/packages/Contoso.Viewer' }
+        Mock -ModuleName AppDepot Invoke-DepotApi { throw 'should not be called' } -ParameterFilter { $Path -eq 'apps' }
+        { New-DepotApp -WingetId Contoso.Viewer -WhatIf } | Should -Not -Throw
+        Should -Invoke -ModuleName AppDepot Invoke-DepotApi -Times 0 -ParameterFilter { $Path -eq 'apps' }
+    }
+
+    It 'refuses to overwrite an existing application without -Replace' {
+        $existing = $script:Generated.PSObject.Copy(); $existing.in_repository = $true
+        Mock -ModuleName AppDepot Invoke-DepotApi { $existing } -ParameterFilter { $Path -like 'winget/packages/*' }
+        Mock -ModuleName AppDepot Invoke-DepotApi { } -ParameterFilter { $Path -eq 'apps' }
+        New-DepotApp -WingetId Contoso.Viewer -Confirm:$false -WarningAction SilentlyContinue | Out-Null
+        Should -Invoke -ModuleName AppDepot Invoke-DepotApi -Times 0 -ParameterFilter { $Path -eq 'apps' }
+    }
+
+    It 'removes an application and its files' {
+        Mock -ModuleName AppDepot Invoke-DepotApi { [pscustomobject]@{ deleted = 'Contoso.Old' } }
+        Remove-DepotApp Contoso.Old -DeleteFiles -Confirm:$false | Out-Null
+        Should -Invoke -ModuleName AppDepot Invoke-DepotApi -ParameterFilter { $Method -eq 'DELETE' -and $Query.delete_files -eq $true }
+    }
+}

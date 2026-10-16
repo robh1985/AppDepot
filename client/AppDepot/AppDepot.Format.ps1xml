@@ -131,5 +131,50 @@
         </TableRowEntries>
       </TableControl>
     </View>
+    <View>
+      <Name>AppDepot.WingetPackage</Name>
+      <ViewSelectedBy><TypeName>AppDepot.WingetPackage</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>Id</Label><Width>40</Width></TableColumnHeader>
+          <TableColumnHeader><Label>Name</Label><Width>34</Width></TableColumnHeader>
+          <TableColumnHeader><Label>Version</Label><Width>18</Width></TableColumnHeader>
+          <TableColumnHeader><Label>InRepository</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>Id</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Version</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>InRepository</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>AppDepot.SourcePreview</Name>
+      <ViewSelectedBy><TypeName>AppDepot.SourcePreview</TypeName></ViewSelectedBy>
+      <ListControl>
+        <ListEntries>
+          <ListEntry>
+            <ListItems>
+              <ListItem><PropertyName>Id</PropertyName></ListItem>
+              <ListItem><PropertyName>Name</PropertyName></ListItem>
+              <ListItem><PropertyName>Category</PropertyName></ListItem>
+              <ListItem><PropertyName>LatestVersion</PropertyName></ListItem>
+              <ListItem><PropertyName>Installer</PropertyName></ListItem>
+              <ListItem><PropertyName>MsiAvailable</PropertyName></ListItem>
+              <ListItem><PropertyName>Source</PropertyName></ListItem>
+              <ListItem><PropertyName>FileName</PropertyName></ListItem>
+              <ListItem><PropertyName>Note</PropertyName></ListItem>
+              <ListItem><PropertyName>InRepository</PropertyName></ListItem>
+              <ListItem><Label>Errors</Label><ScriptBlock>$_.Errors -join '; '</ScriptBlock></ListItem>
+            </ListItems>
+          </ListEntry>
+        </ListEntries>
+      </ListControl>
+    </View>
   </ViewDefinitions>
 </Configuration>

@@ -11,7 +11,6 @@ source:
   type: winget
   package: VideoLAN.VLC
   architecture: x64
-  installer_type: [wix, msi, nullsoft]
 
 detection:
   display_name: '^VLC media player'

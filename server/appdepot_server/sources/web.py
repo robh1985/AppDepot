@@ -9,7 +9,11 @@
       # either a regex for the link (group 'url' or 1, relative links allowed) ...
       url_regex: 'href="(?P<url>a/7z\\d+-x64\\.msi)"'
       # ... or a template using {version}, {version_nodots}, {major}, {minor} ...
-      download_url: https://www.7-zip.org/a/7z{version_nodots}-x64.msi
+      # A list of templates is allowed: every URL is a candidate and the preferred
+      # installer type (MSI) that actually exists wins.
+      download_url:
+        - https://www.7-zip.org/a/7z{version_nodots}-x64.msi
+        - https://www.7-zip.org/a/7z{version_nodots}-x64.exe
 
 ``json`` - query a JSON API::
 
@@ -41,6 +45,8 @@ from urllib.parse import urljoin
 from ..versioning import max_version
 from .base import (
     ReleaseInfo,
+    as_list,
+    type_from_filename,
     Source,
     SourceContext,
     clean_version,
@@ -49,6 +55,16 @@ from .base import (
     regex_first,
     render_template,
 )
+
+
+def candidates_for(version: str, urls: list[str], cfg: dict) -> list[ReleaseInfo]:
+    single = len(urls) == 1
+    out = []
+    for order, url in enumerate(urls):
+        filename = (cfg.get("filename") if single else None) or filename_from_url(url)
+        out.append(ReleaseInfo(version=version, url=url, filename=filename,
+                               installer_type=type_from_filename(filename), order=order))
+    return out
 
 
 class WebSource(Source):
@@ -62,6 +78,9 @@ class WebSource(Source):
             raise ValueError("'web' source requires url_regex or download_url")
 
     def resolve(self, ctx: SourceContext) -> ReleaseInfo:
+        return self.resolve_all(ctx)[0]
+
+    def resolve_all(self, ctx: SourceContext) -> list[ReleaseInfo]:
         resp = ctx.client.get(self.config["url"])
         resp.raise_for_status()
         page = resp.text
@@ -74,15 +93,19 @@ class WebSource(Source):
         if not version:
             raise LookupError(f"version_regex did not match {self.config['url']}")
         if self.config.get("download_url"):
-            url = render_template(self.config["download_url"], version)
+            urls = [render_template(t, version) for t in as_list(self.config["download_url"])]
         else:
-            pattern = render_template(self.config["url_regex"], version) \
-                if "{version" in self.config["url_regex"] else self.config["url_regex"]
-            link = regex_first(pattern, page, group="url")
-            if not link:
+            urls = []
+            for rx_text in as_list(self.config["url_regex"]):
+                pattern = render_template(rx_text, version) if "{version" in rx_text else rx_text
+                for m in re.finditer(pattern, page):
+                    link = m.group("url") if "url" in m.groupdict() else (m.group(1) if m.groups() else m.group(0))
+                    full = urljoin(str(resp.url), link.replace("&amp;", "&"))
+                    if full not in urls:
+                        urls.append(full)
+            if not urls:
                 raise LookupError("url_regex did not match the download page")
-            url = urljoin(str(resp.url), link.replace("&amp;", "&"))
-        return ReleaseInfo(version=version, url=url, filename=self.config.get("filename") or filename_from_url(url))
+        return candidates_for(version, urls, self.config)
 
 
 class JsonSource(Source):
@@ -96,19 +119,31 @@ class JsonSource(Source):
             raise ValueError("'json' source requires url_path or download_url")
 
     def resolve(self, ctx: SourceContext) -> ReleaseInfo:
+        return self.resolve_all(ctx)[0]
+
+    def resolve_all(self, ctx: SourceContext) -> list[ReleaseInfo]:
         resp = ctx.client.get(self.config["url"], headers={"Accept": "application/json"})
         resp.raise_for_status()
         data = resp.json()
         version = clean_version(json_path(data, self.config["version_path"]), self.config)
         if self.config.get("url_path"):
-            url = str(json_path(data, self.config["url_path"]))
+            urls = []
+            for path in as_list(self.config["url_path"]):
+                try:
+                    urls.append(str(json_path(data, path)))
+                except (KeyError, IndexError, ValueError):
+                    continue
+            if not urls:
+                raise LookupError("url_path not found in the JSON response")
         else:
-            url = render_template(self.config["download_url"], version)
+            urls = [render_template(t, version) for t in as_list(self.config["download_url"])]
         sha = None
-        if self.config.get("sha256_path"):
+        if self.config.get("sha256_path") and len(urls) == 1:
             sha = str(json_path(data, self.config["sha256_path"])).lower()
-        return ReleaseInfo(version=version, url=url, sha256=sha,
-                           filename=self.config.get("filename") or filename_from_url(url))
+        found = candidates_for(version, urls, self.config)
+        if sha:
+            found[0].sha256 = sha
+        return found
 
 
 class UrlSource(Source):

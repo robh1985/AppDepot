@@ -8,7 +8,7 @@ MSI product code for thousands of applications.
       type: winget
       package: 7zip.7zip          # winget PackageIdentifier
       architecture: x64           # x64 | x86 | arm64 | neutral (default x64)
-      installer_type: msi         # optional preference (string or list)
+      installer_type: msi         # optional: only consider these type(s) (string or list)
       scope: machine              # optional preference (default machine)
       locale: en-US               # optional
       version_filter: '^\\d+\\.\\d+$'  # optional regex; versions must match
@@ -22,7 +22,7 @@ from typing import Any
 import yaml
 
 from ..versioning import sort_versions
-from .base import ReleaseInfo, Source, SourceContext, filename_from_url
+from .base import ReleaseInfo, Source, SourceContext, as_list, filename_from_url
 
 API = "https://api.github.com/repos/microsoft/winget-pkgs/contents/"
 RAW = "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/"
@@ -72,7 +72,12 @@ class WingetSource(Source):
                 return yaml.safe_load(resp.text)
         raise LookupError(f"Installer manifest for {pkg} {version} not found")
 
-    def select_installer(self, manifest: dict[str, Any]) -> dict[str, Any]:
+    def installer_candidates(self, manifest: dict[str, Any]) -> list[dict[str, Any]]:
+        """Usable installers for the configured architecture, best first.
+
+        Installer *type* preference (MSI first) is applied by the updater across all
+        sources; here an explicit ``installer_type`` only narrows the choice.
+        """
         root_keys = ("InstallerType", "InstallerSwitches", "Scope", "ProductCode",
                      "NestedInstallerType", "InstallerLocale", "ReleaseNotesUrl")
         candidates = []
@@ -82,43 +87,52 @@ class WingetSource(Source):
             switches = dict(manifest.get("InstallerSwitches") or {})
             switches.update(inst.get("InstallerSwitches") or {})
             merged["InstallerSwitches"] = switches
-            itype = str(merged.get("InstallerType", "")).lower()
-            if itype in UNSUPPORTED:
+            if str(merged.get("InstallerType", "")).lower() in UNSUPPORTED:
                 continue
             candidates.append(merged)
         if not candidates:
             raise LookupError("No supported installers in winget manifest (zip/portable/store are skipped)")
 
-        arch_pref = [self.config.get("architecture", "x64")]
-        if arch_pref[0] == "x64":
-            arch_pref += ["neutral", "x86"]
-        elif arch_pref[0] == "x86":
-            arch_pref += ["neutral"]
-        types = self.config.get("installer_type")
-        type_pref = [types] if isinstance(types, str) else list(types or [])
+        # Architecture: the requested one (or neutral) beats a fallback (x86 on x64).
+        wanted = str(self.config.get("architecture", "x64")).lower()
+        tiers = {wanted: 0, "neutral": 0}
+        if wanted == "x64":
+            tiers["x86"] = 1
+        arch_of = lambda c: str(c.get("Architecture", "neutral")).lower()  # noqa: E731
+        usable = [c for c in candidates if arch_of(c) in tiers]
+        if not usable:
+            raise LookupError(f"No installer for architecture {wanted}")
+        best_tier = min(tiers[arch_of(c)] for c in usable)
+        usable = [c for c in usable if tiers[arch_of(c)] == best_tier]
+
+        # Scope: drop per-user installers when a machine-wide one exists.
         scope_pref = self.config.get("scope", "machine")
+        scope_of = lambda c: str(c.get("Scope", "")).lower()  # noqa: E731
+        if any(scope_of(c) in (scope_pref, "") for c in usable):
+            usable = [c for c in usable if scope_of(c) in (scope_pref, "")]
+
+        # Explicit type(s) in the source config narrow the choice.
+        type_pref = [t.lower() for t in as_list(self.config.get("installer_type"))]
+        if type_pref:
+            matching = [c for c in usable if str(c.get("InstallerType", "")).lower() in type_pref]
+            if matching:
+                usable = matching
+            elif self.config.get("strict_type", False):
+                raise LookupError(f"No installer of type {type_pref}")
+
         locale = self.config.get("locale")
+        type_of = lambda c: str(c.get("InstallerType", "")).lower()  # noqa: E731
+        usable.sort(key=lambda c: (
+            type_pref.index(type_of(c)) if type_of(c) in type_pref else len(type_pref),
+            0 if scope_of(c) == scope_pref else 1,
+            0 if not locale or c.get("InstallerLocale") in (None, locale) else 1,
+        ))
+        return usable
 
-        def score(c: dict[str, Any]) -> tuple:
-            arch = str(c.get("Architecture", "neutral")).lower()
-            itype = str(c.get("InstallerType", "")).lower()
-            scope = str(c.get("Scope", "")).lower()
-            return (
-                arch_pref.index(arch) if arch in arch_pref else 99,
-                type_pref.index(itype) if itype in type_pref else (0 if not type_pref else 50),
-                0 if scope == scope_pref else (1 if not scope else 2),
-                0 if not locale or c.get("InstallerLocale") in (None, locale) else 1,
-            )
+    def select_installer(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        return self.installer_candidates(manifest)[0]
 
-        best = min(candidates, key=score)
-        s = score(best)
-        if s[0] == 99:
-            raise LookupError(f"No installer for architecture {arch_pref[0]}")
-        if type_pref and s[1] == 50 and self.config.get("strict_type", False):
-            raise LookupError(f"No installer of type {type_pref}")
-        return best
-
-    def resolve(self, ctx: SourceContext) -> ReleaseInfo:
+    def resolve_all(self, ctx: SourceContext) -> list[ReleaseInfo]:
         versions = self.list_versions(ctx)
         last_error: Exception | None = None
         # The newest folder can occasionally contain only a locale manifest;
@@ -126,26 +140,32 @@ class WingetSource(Source):
         for version in versions[:3]:
             try:
                 manifest = self.fetch_installer_manifest(ctx, version)
-                inst = self.select_installer(manifest)
+                installers = self.installer_candidates(manifest)
                 break
             except LookupError as exc:
                 last_error = exc
         else:
             raise last_error or LookupError("No usable winget manifest")
 
-        switches = inst.get("InstallerSwitches") or {}
-        itype = WINGET_TYPE_MAP.get(str(inst.get("InstallerType", "")).lower(), "exe")
-        url = inst["InstallerUrl"]
-        return ReleaseInfo(
-            version=str(manifest.get("PackageVersion", version)),
-            url=url,
-            filename=filename_from_url(url),
-            installer_type=itype,
-            sha256=(inst.get("InstallerSha256") or "").lower() or None,
-            install_args=switches.get("Silent"),   # replaces the type defaults
-            extra_args=switches.get("Custom"),      # appended
-            product_code=inst.get("ProductCode"),
-            architecture=str(inst.get("Architecture", "")).lower() or None,
-            scope=str(inst.get("Scope", "")).lower() or None,
-            release_notes_url=inst.get("ReleaseNotesUrl"),
-        )
+        out = []
+        for order, inst in enumerate(installers):
+            switches = inst.get("InstallerSwitches") or {}
+            url = inst["InstallerUrl"]
+            out.append(ReleaseInfo(
+                version=str(manifest.get("PackageVersion", version)),
+                url=url,
+                filename=filename_from_url(url),
+                installer_type=WINGET_TYPE_MAP.get(str(inst.get("InstallerType", "")).lower(), "exe"),
+                sha256=(inst.get("InstallerSha256") or "").lower() or None,
+                install_args=switches.get("Silent"),   # replaces the type defaults
+                extra_args=switches.get("Custom"),      # appended
+                product_code=inst.get("ProductCode"),
+                architecture=str(inst.get("Architecture", "")).lower() or None,
+                scope=str(inst.get("Scope", "")).lower() or None,
+                release_notes_url=inst.get("ReleaseNotesUrl"),
+                order=order,
+            ))
+        return out
+
+    def resolve(self, ctx: SourceContext) -> ReleaseInfo:
+        return self.resolve_all(ctx)[0]

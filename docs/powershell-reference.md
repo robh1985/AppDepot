@@ -17,6 +17,11 @@ _Generated from the module's comment-based help. The same text is available with
 | [Get-DepotEvent](#get-depotevent) | Reads the server event log (downloads, updates, purges, schedule changes, errors). |
 | [Invoke-DepotServerCheck](#invoke-depotservercheck) | Asks the server to check the internet for new versions now. (Administrative) |
 | [Set-DepotSchedule](#set-depotschedule) | Changes the global or a per-application update schedule on the server. (Administrative) |
+| [Find-DepotWingetPackage](#find-depotwingetpackage) | Searches the winget catalog for applications to add to the repository. (Administrative) |
+| [Test-DepotAppSource](#test-depotappsource) | Previews what the server would download for an application, without saving anything. |
+| [New-DepotApp](#new-depotapp) | Adds a new application to the repository. (Administrative) |
+| [Remove-DepotApp](#remove-depotapp) | Removes an application from the repository. (Administrative) |
+| [Get-DepotManifestTemplate](#get-depotmanifesttemplate) | Returns a manifest template for writing an application definition by hand. |
 | [Get-DepotConfig](#get-depotconfig) | Shows the AppDepot client configuration. |
 | [Set-DepotConfig](#set-depotconfig) | Changes the AppDepot client configuration. |
 | [Test-DepotConnection](#test-depotconnection) | Tests the connection to the AppDepot server and the repository share. |
@@ -535,6 +540,238 @@ Set-DepotSchedule -Id Google.Chrome -Schedule '0 */4 * * *'
 Set-DepotSchedule -Id Contoso.LegacyApp -Schedule manual
 ```
 
+## Find-DepotWingetPackage
+
+Searches the winget catalog for applications to add to the repository. (Administrative)
+
+```powershell
+Find-DepotWingetPackage -Query <String> [-Limit <Int32>]
+```
+
+### Description
+
+```text
+Searches winget package ids, names and monikers through the AppDepot server. Each result
+shows whether the application is already in the repository. Add a result with
+New-DepotApp -WingetId <Id>. Requires the server API key.
+```
+
+### Parameters
+
+| Parameter | Type | Required | Pipeline | Description |
+|---|---|---|---|---|
+| `-Query` | String | true | false | Text to search for, e.g. 'chrome' or 'Adobe Acrobat'. |
+| `-Limit` | Int32 | false | false | Maximum number of results (default 25). |
+
+### Examples
+
+```powershell
+Find-DepotWingetPackage chrome
+
+Id                   Name                 Version         InRepository
+--                   ----                 -------         ------------
+Google.Chrome        Google Chrome        130.0.6723.92   True
+Google.Chrome.Beta   Google Chrome Beta   131.0.6778.24   False
+```
+
+```powershell
+Find-DepotWingetPackage 'remote desktop' | Where-Object -Not InRepository
+```
+
+**Output:** `AppDepot.WingetPackage`
+
+## Test-DepotAppSource
+
+Previews what the server would download for an application, without saving anything.
+
+```powershell
+Test-DepotAppSource -WingetId <String> [-Category <String>] [-Architecture <String>]
+Test-DepotAppSource -Path <String>
+Test-DepotAppSource -Manifest <Hashtable>
+Test-DepotAppSource -Id <String>
+```
+
+### Description
+
+```text
+Asks the server to query every source of an application and report the newest version,
+every installer candidate, whether an MSI is available and which installer would be
+selected (MSI is preferred over all other types). Nothing is saved or downloaded.
+
+Use it before New-DepotApp, to check a manifest you are writing, or to see why an
+existing application uses a particular installer. Requires the server API key.
+```
+
+### Parameters
+
+| Parameter | Type | Required | Pipeline | Description |
+|---|---|---|---|---|
+| `-WingetId` | String | true | false | A winget package id; the manifest is generated from winget's metadata. |
+| `-Path` | String | true | false | A manifest YAML file. |
+| `-Manifest` | Hashtable | true | false | A manifest as a hashtable (same keys as the YAML file). |
+| `-Id` | String | true | false | An application already in the repository. |
+| `-Category` | String | false | false | Category to use for a generated winget manifest. |
+| `-Architecture` | String | false | false | Architecture for a generated winget manifest (default x64). |
+
+### Examples
+
+```powershell
+Test-DepotAppSource -WingetId Notepad++.Notepad++
+
+Id            : Notepad++.Notepad++
+LatestVersion : 8.7.1
+Installer     : nullsoft
+MsiAvailable  : False
+Note          : No MSI available for version 8.7.1 from 1 source(s) (found: nullsoft); using nullsoft from winget (source 1 of 1)
+```
+
+```powershell
+(Test-DepotAppSource -Path .\Contoso.App.yaml).Candidates | Format-Table
+```
+
+```powershell
+Test-DepotAppSource -Id 7zip.7zip
+```
+
+**Output:** `AppDepot.SourcePreview`
+
+## New-DepotApp
+
+Adds a new application to the repository. (Administrative)
+
+```powershell
+New-DepotApp -WingetId <String> [-Category <String>] [-Architecture <String>] [-CheckNow] [-Replace] [-WhatIf] [-Confirm]
+New-DepotApp -Path <String> [-CheckNow] [-Replace] [-WhatIf] [-Confirm]
+New-DepotApp -Manifest <Hashtable> [-CheckNow] [-Replace] [-WhatIf] [-Confirm]
+```
+
+### Description
+
+```text
+Adds an application in one of three ways:
+
+  -WingetId   the server generates the manifest from the winget catalog (name, publisher,
+              description, licence, homepage, category, detection rule)
+  -Path       a manifest YAML file you wrote (see Get-DepotManifestTemplate)
+  -Manifest   a hashtable with the same keys as a manifest file
+
+The server previews the sources first; the result tells you which installer will be used
+and whether an MSI is available (MSI is always preferred). The manifest is then saved in
+the server's manifests folder and loaded into the database. Use -CheckNow to download the
+application immediately instead of waiting for the next scheduled check.
+
+Use -WhatIf to see the preview without adding anything. Requires the server API key.
+```
+
+### Parameters
+
+| Parameter | Type | Required | Pipeline | Description |
+|---|---|---|---|---|
+| `-WingetId` | String | true | true (ByPropertyName) | winget package id, e.g. Notepad++.Notepad++ (find it with Find-DepotWingetPackage). |
+| `-Path` | String | true | false | Manifest YAML file. |
+| `-Manifest` | Hashtable | true | false | Manifest hashtable. |
+| `-Category` | String | false | false | Category for a winget application (default: guessed from its description and tags). |
+| `-Architecture` | String | false | false | Architecture for a winget application (default x64). |
+| `-CheckNow` | SwitchParameter | false | false | Download the application right away. |
+| `-Replace` | SwitchParameter | false | false | Overwrite an application that already exists. |
+
+### Examples
+
+```powershell
+New-DepotApp -WingetId Notepad++.Notepad++ -CheckNow
+```
+
+```powershell
+Find-DepotWingetPackage putty | Select-Object -First 1 | New-DepotApp -Category Networking
+```
+
+```powershell
+New-DepotApp -WingetId Adobe.Acrobat.Reader.64-bit -WhatIf
+
+Shows the generated manifest and installer preview without adding the application.
+```
+
+```powershell
+Get-DepotManifestTemplate web | Set-Content .\Contoso.App.yaml
+notepad .\Contoso.App.yaml
+Test-DepotAppSource -Path .\Contoso.App.yaml
+New-DepotApp -Path .\Contoso.App.yaml -CheckNow
+```
+
+```powershell
+New-DepotApp -Manifest @{
+    id = 'Contoso.Agent'; name = 'Contoso Agent'; publisher = 'Contoso'; category = 'Security'
+    source = @{ type = 'url'; url = 'https://contoso.example/agent/latest.msi'; version_from = 'msi' }
+}
+```
+
+**Output:** `AppDepot.SourcePreview`
+
+## Remove-DepotApp
+
+Removes an application from the repository. (Administrative)
+
+```powershell
+Remove-DepotApp -Id <String> [-DeleteFiles] [-WhatIf] [-Confirm]
+```
+
+### Description
+
+```text
+Removes the application from the database and stops checking it for updates. Its manifest
+file on the server is renamed to *.removed (so it is not re-added and can be restored).
+Stored installers are kept unless -DeleteFiles is used. Computers that already installed the
+application are not affected. Requires the server API key.
+```
+
+### Parameters
+
+| Parameter | Type | Required | Pipeline | Description |
+|---|---|---|---|---|
+| `-Id` | String | true | true (ByPropertyName) | Application id. |
+| `-DeleteFiles` | SwitchParameter | false | false | Also delete every stored version (installers and Intune packages) from the repository. |
+
+### Examples
+
+```powershell
+Remove-DepotApp Contoso.OldTool
+```
+
+```powershell
+Remove-DepotApp Contoso.OldTool -DeleteFiles -Confirm:$false
+```
+
+## Get-DepotManifestTemplate
+
+Returns a manifest template for writing an application definition by hand.
+
+```powershell
+Get-DepotManifestTemplate -Type <String>
+```
+
+### Description
+
+```text
+Templates exist for every source type: winget, github, web (scrape a download page), json
+(vendor API), url (fixed "latest" link) and multi (several sources; the MSI is preferred).
+Save the template, edit it, check it with Test-DepotAppSource -Path and add it with
+New-DepotApp -Path. See docs/manifest-reference.md for every option.
+```
+
+### Parameters
+
+| Parameter | Type | Required | Pipeline | Description |
+|---|---|---|---|---|
+| `-Type` | String | true | false | winget, github, web, json, url or multi. |
+
+### Examples
+
+```powershell
+Get-DepotManifestTemplate web | Set-Content .\Contoso.App.yaml
+```
+
+**Output:** `System.String`
+
 ## Get-DepotConfig
 
 Shows the AppDepot client configuration.
@@ -701,8 +938,9 @@ A WPF application for browsing the repository and managing applications on this 
   Catalog    every application in the repository, with details, versions and install button
   Installed  catalog applications installed on this computer
   Updates    installed applications with a newer version available, with "Update all"
+  Add apps   search winget and add applications to the repository (needs the API key)
   Activity   the server's event log and the operations performed in this session
-  Settings   server URL, transfer method and cache options
+  Settings   server URL, transfer method, cache options and API key
 
 All server calls and installations run in the background so the window stays responsive.
 Run it elevated (as administrator) to install machine-wide applications; the window offers

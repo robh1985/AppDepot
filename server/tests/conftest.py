@@ -5,6 +5,7 @@ import httpx
 import pytest
 import yaml
 
+from appdepot_server import onboarding as onboarding_module
 from appdepot_server import updater as updater_module
 from appdepot_server.config import Config, DEFAULTS, _merge
 from appdepot_server.context import build_context
@@ -41,6 +42,7 @@ class FakeWeb:
 def web(monkeypatch):
     fake = FakeWeb()
     monkeypatch.setattr(updater_module, "make_client", fake.client)
+    monkeypatch.setattr(onboarding_module, "make_client", fake.client)
     return fake
 
 
