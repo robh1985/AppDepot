@@ -13,6 +13,7 @@
     appdepot-server events [--app APP_ID] [--limit 50]
     appdepot-server validate FILE ...          validate manifest files
     appdepot-server verify-package FILE        verify an .intunewin file
+    appdepot-server check-signature FILE [--signer REGEX]   Authenticode check (Windows)
 
   Adding applications (see docs/adding-applications.md):
     appdepot-server app create APP_ID --name NAME [--type msi] [--args ...] [--installer FILE --version V]
@@ -100,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("verify-package", help="Verify the encryption/integrity of an .intunewin file")
     sp.add_argument("file")
 
+    sp = sub.add_parser("check-signature", help="Check a file's Authenticode signature (Windows)")
+    sp.add_argument("file")
+    sp.add_argument("--signer", default=".", help="Regex the signer must match (default: any)")
+
     sp = sub.add_parser("app", help="Add, test and remove applications")
     asub = sp.add_subparsers(dest="action", required=True)
     a = asub.add_parser("search", help="Search the winget catalog")
@@ -167,6 +172,12 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:  # noqa: BLE001
                 ok = False
                 print(f"ERROR  {exc}")
+        return 0 if ok else 1
+
+    if args.cmd == "check-signature":
+        from .packages import verify_signature
+        ok, detail = verify_signature(Path(args.file), args.signer)
+        print({True: "OK", False: "FAILED", None: "NOT CHECKED"}[ok] + f"  {detail}")
         return 0 if ok else 1
 
     if args.cmd == "verify-package":

@@ -249,7 +249,9 @@ uninstaller silently — this works in Intune and in the client.
   setup file. Clients download the archive, extract it and run the setup file.
 - **Signatures**: `installer.signer: Adobe` rejects files whose Authenticode signature is not valid
   or not from a matching signer, and tries the next candidate. The check uses Windows' own
-  verification, so it runs on Windows servers; on Linux it is logged as "not verified".
+  verification, so it runs on Windows servers; on Linux it is logged as "not verified". If the check
+  itself cannot run (PowerShell missing or broken) the file is kept and the reason is logged as an
+  error. Test it with `appdepot-server check-signature <file> --signer Adobe`.
 - **Patches** (`.msp`) are installed only on computers that have the product. Use `update_with`
   on the product's application to link them.
 

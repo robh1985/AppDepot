@@ -87,6 +87,9 @@ def download_file(client: httpx.Client, url: str, dest_dir: Path, expected_sha25
     return Path(tmp_name), digest, size, final_url, cd_name
 
 
+INSTALLER_EXTENSIONS = {".msi", ".msp", ".exe", ".zip", ".msix", ".msixbundle", ".appx", ".appxbundle"}
+
+
 def sniff_extension(path: Path) -> str:
     """Extension for a download whose name has none, from the file's first bytes."""
     with open(path, "rb") as fh:
@@ -290,7 +293,8 @@ class Updater:
                     chosen = c
                     break
                 except DOWNLOAD_ERRORS as exc:
-                    failures.append(f"{candidate_type(c)} {c.version} from {c.source_type}: {exc}")
+                    kind = c.inspected.installer_type if c.inspected else candidate_type(c)
+                    failures.append(f"{kind} {c.version} from {c.source_type}: {exc}")
                     self.db.log_event("download", f"Download failed, trying next candidate: {exc}",
                                       app_id=app_id, version=c.version, level="error")
             if chosen is None:
@@ -410,8 +414,11 @@ class Updater:
         temp_dirs.append(temp_dir)
         path, sha, size, final_url, cd_name = download_file(client, c.url, temp_dir, c.sha256, c.sha512)
         filename = safe_segment(c.filename or cd_name or Path(final_url.split("?")[0]).name or "installer")
-        if "." not in filename:
-            filename += sniff_extension(path)
+        if Path(filename).suffix.lower() not in INSTALLER_EXTENSIONS:
+            # e.g. fwlink downloads (no extension) or "media.nl?...&_xt=.zip": name it by its content
+            sniffed = sniff_extension(path)
+            if sniffed != ".bin" or "." not in filename:
+                filename = (Path(filename).stem if "." in filename else filename) + sniffed
         named = temp_dir / filename
         path.rename(named)
         return named, sha, size, final_url, cd_name

@@ -240,22 +240,57 @@ def _resolve_type(path: Path, declared: str | None, candidate: str | None) -> st
     return guess_installer_type(path)
 
 
+SIGNATURE_SCRIPT = (
+    "$ErrorActionPreference = 'Stop'; "
+    "Import-Module Microsoft.PowerShell.Security; "
+    "$s = Get-AuthenticodeSignature -LiteralPath $env:APPDEPOT_SIGFILE; "
+    "[Console]::Out.Write((ConvertTo-Json -Compress -InputObject @{ "
+    "Status = [string]$s.Status; Subject = [string]$s.SignerCertificate.Subject; "
+    "Message = [string]$s.StatusMessage }))"
+)
+
+
+def _powershell() -> str | None:
+    """Windows PowerShell 5.1 (always present on Windows Server), then PowerShell 7."""
+    system_ps = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if system_ps.exists():
+        return str(system_ps)
+    return shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+
+
 def verify_signature(path: Path, signer: str) -> tuple[bool | None, str]:
-    """(True/False, detail) on Windows; (None, reason) where it cannot be checked."""
+    """(True/False, detail) on Windows; (None, reason) where it cannot be checked.
+
+    False means the file is unsigned, tampered with or signed by someone else, and the
+    download is rejected. None means the check itself could not run; the download is
+    kept and the reason logged.
+    """
     if os.name != "nt":
         return None, "signature not verified (only possible on a Windows server)"
-    ps = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+    ps = _powershell()
     if not ps:
         return None, "signature not verified (PowerShell not found)"
-    script = ("$s = Get-AuthenticodeSignature -LiteralPath $env:APPDEPOT_SIGFILE; "
-              "[pscustomobject]@{Status=[string]$s.Status; Subject=[string]$s.SignerCertificate.Subject} "
-              "| ConvertTo-Json -Compress")
+    # A PSModulePath inherited from PowerShell 7 makes Windows PowerShell load the wrong
+    # Microsoft.PowerShell.Security module, so Get-AuthenticodeSignature fails. Start clean.
+    env = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+    env["APPDEPOT_SIGFILE"] = str(path)
     try:
-        proc = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True,
-                              text=True, timeout=300, env={**os.environ, "APPDEPOT_SIGFILE": str(path)})
-        data = json.loads(proc.stdout.strip() or "{}")
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        return None, f"signature check could not run: {exc}"
-    status, subject = data.get("Status", ""), data.get("Subject", "")
-    ok = status == "Valid" and re.search(signer, subject or "", re.IGNORECASE) is not None
-    return ok, f"status {status or 'unknown'}, signer {subject or 'none'}"
+        proc = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+                               SIGNATURE_SCRIPT], capture_output=True, text=True, timeout=300, env=env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"signature not verified: PowerShell could not run ({exc})"
+    out = (proc.stdout or "").strip().lstrip("\ufeff")
+    try:
+        data = json.loads(out[out.find("{"):]) if "{" in out else {}
+    except ValueError:
+        data = {}
+    status, subject = data.get("Status") or "", data.get("Subject") or ""
+    if not status:
+        err = " ".join((proc.stderr or proc.stdout or "no output").split())[:300]
+        log.warning("Authenticode check of %s did not run (exit %s): %s", path.name, proc.returncode, err)
+        return None, f"signature not verified: the check did not run ({err})"
+    ok = status == "Valid" and re.search(signer, subject, re.IGNORECASE) is not None
+    detail = f"status {status}, signer {subject or 'none'}"
+    if status != "Valid" and data.get("Message"):
+        detail += f" - {data['Message']}"
+    return ok, detail

@@ -234,6 +234,7 @@ appdepot-server [--config FILE] <command>
   events [--app ID] [--limit N]  event log
   validate FILE ...              validate manifest files
   verify-package FILE            verify an .intunewin (MAC + digest)
+  check-signature FILE [--signer REGEX]   Authenticode signature check (Windows server)
 
   app search QUERY               search the winget catalog
   app add WINGET_ID [--category C] [--arch x64] [--check] [--yes]
