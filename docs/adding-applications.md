@@ -210,7 +210,7 @@ depot app add-catalog --check
 On the server itself (no API key needed):
 
 ```bat
-appdepot-server --config C:\AppDepot\appdepot.yaml app add-catalog --check
+appdepot-server --config D:\AppDepot\appdepot.yaml app add-catalog --check
 ```
 
 - Applications already on the server with an identical manifest are left alone.

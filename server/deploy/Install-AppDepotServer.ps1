@@ -19,7 +19,13 @@
     alone (use -UpdateCatalog to replace edited ones, -SkipCatalog to add none).
 
 .PARAMETER InstallPath
-    Program folder (code, virtual environment, config, database). Default C:\AppDepot
+    Program folder (virtual environment, appdepot.yaml, database, logs, manifests).
+    Default: an existing installation if there is one, otherwise \AppDepot on the same drive as
+    -RepositoryPath (D:\AppDepot for the default repository path).
+
+    To move an existing installation, give the new folder: the service is stopped, appdepot.yaml,
+    the database, manifests and logs are copied there, paths in appdepot.yaml are updated and the
+    service is re-registered from the new folder. The old folder is left in place for you to delete.
 
 .PARAMETER RepositoryPath
     Folder that holds the installers and Intune packages. Default D:\AppDepot\Repository
@@ -54,11 +60,15 @@
     Download the newly added applications straight away instead of waiting for the schedule.
 
 .EXAMPLE
+    .\Install-AppDepotServer.ps1 -InstallPath D:\AppDepot
+    Moves an installation from C:\AppDepot to D:\AppDepot (repository files are not touched).
+
+.EXAMPLE
     .\Install-AppDepotServer.ps1 -RepositoryPath E:\AppDepot -AllowedSubnets 10.10.0.0/16,10.20.0.0/16 -NssmPath C:\Tools\nssm.exe
 #>
 [CmdletBinding()]
 param(
-    [string] $InstallPath = 'C:\AppDepot',
+    [string] $InstallPath,
     [string] $RepositoryPath = 'D:\AppDepot\Repository',
     [string] $ShareName = 'AppDepot',
     [int] $Port = 8080,
@@ -75,6 +85,55 @@ $source = Split-Path -Parent $PSScriptRoot     # ...\server
 
 function Write-Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
 
+function Get-ExistingInstallPath {
+    # From the registered service (NSSM) or scheduled task: <InstallPath>\venv\Scripts\appdepot-server.exe
+    $exePath = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\AppDepot\Parameters' -ErrorAction SilentlyContinue).Application
+    if (-not $exePath) {
+        $task = Get-ScheduledTask -TaskName 'AppDepot Server' -ErrorAction SilentlyContinue
+        if ($task) { $exePath = $task.Actions[0].Execute }
+    }
+    if ($exePath -and $exePath -match '\\venv\\Scripts\\appdepot-server\.exe$') {
+        $dir = Split-Path (Split-Path (Split-Path $exePath -Parent) -Parent) -Parent
+        if (Test-Path (Join-Path $dir 'appdepot.yaml')) { return $dir }
+    }
+    if (Test-Path 'C:\AppDepot\appdepot.yaml') { return 'C:\AppDepot' }
+    return $null
+}
+
+function Stop-AppDepotServer {
+    if (Get-Service AppDepot -ErrorAction SilentlyContinue) { Stop-Service AppDepot -Force -ErrorAction SilentlyContinue }
+    if (Get-ScheduledTask -TaskName 'AppDepot Server' -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName 'AppDepot Server' -ErrorAction SilentlyContinue
+    }
+    Get-Process appdepot-server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+}
+
+function Move-AppDepotInstallation([string] $From, [string] $To) {
+    Write-Step "Moving the installation from $From to $To"
+    Stop-AppDepotServer
+    New-Item -ItemType Directory -Path $To -Force | Out-Null
+    foreach ($item in 'appdepot.yaml', 'appdepot.db', 'appdepot.db-wal', 'appdepot.db-shm', 'manifests', 'Logs') {
+        $src = Join-Path $From $item
+        if (Test-Path $src) { Copy-Item -Path $src -Destination $To -Recurse -Force }
+    }
+    # Point paths in appdepot.yaml (database, log file, manifests) at the new folder. The repository
+    # root is left alone: moving installers and Intune packages is a separate, deliberate step.
+    $configFile = Join-Path $To 'appdepot.yaml'
+    $fromPattern = '(?i)' + [regex]::Escape($From.TrimEnd('\')).Replace('\\', '[\\/]') + '(?=[\\/''"\s]|$)'
+    $lines = foreach ($line in Get-Content $configFile -Encoding UTF8) {
+        if ($line -match '^\s*root\s*:' -and $line -match $fromPattern) {
+            Write-Warning "repository.root is inside $From and was not changed: $($line.Trim())"
+            $line
+        }
+        else {
+            [regex]::Replace($line, $fromPattern, { param($m) if ($m.Value.Contains('/')) { $To.Replace('\', '/') } else { $To.TrimEnd('\') } })
+        }
+    }
+    Set-Content -Path $configFile -Value $lines -Encoding UTF8
+    Write-Host "    Copied configuration, database, manifests and logs. When AppDepot runs from $To, delete $From."
+}
+
 # ------------------------------------------------------------------ Python + venv
 Write-Step 'Preparing Python environment'
 if (-not $PythonPath) {
@@ -85,11 +144,27 @@ if (-not $PythonPath) {
 $ver = & $PythonPath -c 'import sys; print("%d.%d" % sys.version_info[:2])'
 if ([version]$ver -lt [version]'3.10') { throw "Python 3.10 or newer is required (found $ver at $PythonPath)." }
 
+$repoDrive = Split-Path -Qualifier $RepositoryPath -ErrorAction SilentlyContinue
+if ($repoDrive -and -not (Test-Path "$repoDrive\")) { throw "Drive $repoDrive (from -RepositoryPath $RepositoryPath) does not exist." }
+$existing = Get-ExistingInstallPath
+if (-not $InstallPath) {
+    $InstallPath = if ($existing) { $existing } elseif ($repoDrive) { "$repoDrive\AppDepot" } else { 'C:\AppDepot' }
+}
+$InstallPath = $InstallPath.TrimEnd('\')
+Write-Host "    Program folder: $InstallPath    Repository: $RepositoryPath"
+if ($existing -and -not $PSBoundParameters.ContainsKey('InstallPath') -and $repoDrive -and
+    -not $InstallPath.StartsWith($repoDrive, [StringComparison]::OrdinalIgnoreCase)) {
+    Write-Host "    Upgrading the existing installation in $InstallPath. To move it to $repoDrive, run again with -InstallPath $repoDrive\AppDepot" -ForegroundColor Yellow
+}
+if ($existing -and $existing.TrimEnd('\') -ne $InstallPath -and -not (Test-Path (Join-Path $InstallPath 'appdepot.yaml'))) {
+    Move-AppDepotInstallation -From $existing -To $InstallPath
+}
+
 New-Item -ItemType Directory -Path $InstallPath, "$InstallPath\Logs", $RepositoryPath -Force | Out-Null
 $venv = Join-Path $InstallPath 'venv'
 if (-not (Test-Path "$venv\Scripts\python.exe")) { & $PythonPath -m venv $venv }
-& "$venv\Scripts\python.exe" -m pip install --upgrade pip --quiet
-& "$venv\Scripts\python.exe" -m pip install --upgrade $source --quiet
+& "$venv\Scripts\python.exe" -m pip install --upgrade pip --quiet --no-cache-dir
+& "$venv\Scripts\python.exe" -m pip install --upgrade $source --quiet --no-cache-dir
 if ($LASTEXITCODE) { throw 'pip install failed' }
 
 # ------------------------------------------------------------------ configuration
@@ -140,6 +215,11 @@ if ($AllowedSubnets -notcontains 'Any') {
 
 # ------------------------------------------------------------------ service
 $exe = "$venv\Scripts\appdepot-server.exe"
+if (-not $NssmPath) {
+    # Re-runs keep using the NSSM service an earlier run registered
+    $svc = Get-CimInstance Win32_Service -Filter "Name='AppDepot'" -ErrorAction SilentlyContinue
+    if ($svc -and $svc.PathName -match 'nssm') { $NssmPath = ($svc.PathName -replace '^"([^"]+)".*$', '$1').Trim() }
+}
 & "$venv\Scripts\python.exe" -m appdepot_server -c $config sync | Out-Null
 if (-not $SkipCatalog) {
     Write-Step 'Adding the bundled application catalog'

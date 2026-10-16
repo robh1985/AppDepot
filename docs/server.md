@@ -26,7 +26,7 @@ accounts. Run as administrator:
 ```powershell
 cd AppDepot\server\deploy
 .\Install-AppDepotServer.ps1 `
-    -InstallPath C:\AppDepot `
+    -InstallPath D:\AppDepot `
     -RepositoryPath D:\AppDepot\Repository `
     -ShareName AppDepot `
     -Port 8080 `
@@ -36,10 +36,13 @@ cd AppDepot\server\deploy
 
 The script
 
-- creates a virtual environment in `C:\AppDepot\venv` and installs the server,
-- adds the bundled application catalog (53 applications) to `C:\AppDepot\manifests`
+- uses a program folder (`-InstallPath`) on the same drive as the repository unless you give one:
+  `D:\AppDepot` for the command above. It holds the Python environment, `appdepot.yaml`, the
+  database, logs and manifests; installers and Intune packages go to `-RepositoryPath`,
+- creates a virtual environment in `<InstallPath>\venv` and installs the server,
+- adds the bundled application catalog (53 applications) to `<InstallPath>\manifests`
   (`-SkipCatalog` adds none; `-CheckNow` downloads them straight away),
-- writes `C:\AppDepot\appdepot.yaml` with a random API key (printed once),
+- writes `<InstallPath>\appdepot.yaml` with a random API key (printed once),
 - shares the repository as `\\<server>\AppDepot` — read for *Authenticated Users*
   (this includes computer accounts, so installs running as SYSTEM work), full control for
   Administrators,
@@ -52,10 +55,16 @@ in the bundled catalog. Manifests you edited or removed are left alone; `-Update
 edited ones with the bundled version (keeping `*.yaml.bak`). See
 [adding-applications.md](adding-applications.md#the-bundled-catalog).
 
+To **move** an installation (for example from `C:\AppDepot` to `D:\AppDepot`), run it with the new
+folder: `.\Install-AppDepotServer.ps1 -InstallPath D:\AppDepot -RepositoryPath <your repository>`.
+It stops AppDepot, copies `appdepot.yaml`, the database, manifests and logs, updates the paths in
+`appdepot.yaml`, creates a new Python environment and re-registers the service from the new folder.
+The repository is not moved, and the old folder is left for you to delete once the server works.
+
 Then fetch the first versions:
 
 ```powershell
-C:\AppDepot\venv\Scripts\appdepot-server.exe --config C:\AppDepot\appdepot.yaml check
+D:\AppDepot\venv\Scripts\appdepot-server.exe --config D:\AppDepot\appdepot.yaml check
 ```
 
 ## Installation on Linux
